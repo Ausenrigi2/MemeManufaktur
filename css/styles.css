@@ -195,11 +195,17 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--blue); }
 .timerbar i { display: block; height: 100%; background: var(--green); transition: width 0.2s linear, background 0.3s; }
 .timerbar.warn i { background: var(--red); }
 .vote-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; text-align: left; }
-.vote-card { border: var(--border); border-radius: 12px; background: var(--input); overflow: hidden; cursor: pointer; box-shadow: var(--shadow-sm); transition: transform 0.1s; }
+.vote-card { border: var(--border); border-radius: 12px; background: var(--input); overflow: hidden; box-shadow: var(--shadow-sm); transition: transform 0.1s; }
 .vote-card:hover { transform: translateY(-3px); }
-.vote-card.picked { outline: 5px solid var(--blue); outline-offset: -2px; }
 .vote-card img { width: 100%; display: block; border-bottom: var(--border); }
-.vote-meta { padding: 8px 12px; font-weight: 800; display: flex; justify-content: space-between; gap: 6px; align-items: center; }
+.vote-meta { padding: 8px 12px 4px; font-weight: 800; }
+.vote-btns { display: flex; gap: 6px; padding: 0 12px 12px; }
+.vbtn { flex: 1; border: var(--border); border-radius: 8px; background: var(--card); color: var(--ink); padding: 8px 4px; font-size: 0.85rem; font-weight: 800; cursor: pointer; }
+.vbtn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.vbtn-up.active { background: #e2f4ec; border-color: var(--green); }
+.vbtn-down.active { background: #fbe9ea; border-color: var(--red); }
+.vbtn-peak { font-size: 0.75rem; }
+.vbtn-peak.active { background: var(--yellow); border-color: #d99a1b; }
 .result-list { display: grid; gap: 12px; text-align: left; }
 .result-row { display: flex; gap: 14px; align-items: center; border: var(--border); border-radius: 12px; background: var(--input); padding: 10px 14px; box-shadow: var(--shadow-sm); }
 .result-row img { width: 92px; border: var(--border); border-radius: 8px; }
