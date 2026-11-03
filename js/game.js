@@ -225,7 +225,7 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
     }
 
     // Setup-Formular für Host in der Lobby
-    let cfg = { mode: 'random', relaxed: false, rounds: 3, timeSec: 60, maxVotes: 2, ownPacks: false };
+    let cfg = { mode: 'random', relaxed: false, rounds: 3, timeSec: 90, maxVotes: 2, ownPacks: false };
     function setupControls() {
       const g = el('div', { class: 'card', style: 'max-width:560px;margin:14px auto' });
       const set = (k, v) => { cfg[k] = v; };
@@ -239,10 +239,10 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
       radios.querySelectorAll('input').forEach((r) => r.addEventListener('change', () => set('mode', radios.querySelector('input:checked').value)));
       const rel = el('input', { type: 'checkbox' });
       rel.addEventListener('change', () => set('relaxed', rel.checked));
-      const roundsIn = el('input', { type: 'number', min: 1, max: 8, value: 3, style: { width: '80px' } });
-      roundsIn.addEventListener('input', () => set('rounds', Math.max(1, Number(roundsIn.value) || 3)));
-      const timeIn = el('input', { type: 'number', min: 15, max: 300, step: 5, value: 60, style: { width: '90px' } });
-      timeIn.addEventListener('input', () => set('timeSec', Math.max(15, Number(timeIn.value) || 60)));
+      const roundsSel = el('select', {}, ...[3, 4, 5, 6, 7, 8, 9].map((n) => el('option', { value: n, ...(n === 3 ? { selected: '' } : {}) }, String(n))));
+      roundsSel.addEventListener('change', () => set('rounds', Number(roundsSel.value) || 3));
+      const timeSel = el('select', {}, ...[60, 90, 120, 150].map((n) => el('option', { value: n, ...(n === 90 ? { selected: '' } : {}) }, n + ' s')));
+      timeSel.addEventListener('change', () => set('timeSec', Number(timeSel.value) || 90));
       const ownChk = el('input', { type: 'checkbox' });
       ownChk.addEventListener('change', () => set('ownPacks', ownChk.checked));
       g.append(
@@ -251,8 +251,8 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
         el('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:10px' }, rel, el('span', {}, t('spiel.relaxed'))),
         el('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:10px' }, ownChk, el('span', {}, t('spiel.ownPacks'))),
         el('div', { class: 'fieldrow', style: 'margin-top:10px' },
-          el('div', {}, el('label', {}, t('spiel.rounds')), roundsIn),
-          el('div', {}, el('label', {}, t('spiel.time')), timeIn),
+          el('div', {}, el('label', {}, t('spiel.rounds')), roundsSel),
+          el('div', {}, el('label', {}, t('spiel.time')), timeSel),
         ),
       );
       return g;
@@ -327,8 +327,8 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
           if (msg.hostId !== myId) announceStart(msg);
           break;
         case 'turn':
+          // Alle erstellen parallel – nur der eigene Turn betrifft einen selbst
           if (msg.playerId === myId) doTurn(msg);
-          else showWaiting(players.get(msg.playerId));
           break;
         case 'submit':
           // Nur der Host sammelt die Captions der Runde
@@ -360,10 +360,11 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
 }
 
 // ---------- LAN Host/Guest-Phasen (auf Modulebene, da Closure-Shared-State nötig) ----------
-const lanState = { cfg: null, room: null, round: 0, rounds: 3, memes: [], votes: [], totals: new Map(), theme: null, players: [], assignments: new Map(), turnAdvance: null, voteAdvance: null, ownPacks: new Map() }; // ownPacks: selfId -> [srv-Keys]
+const lanState = { cfg: null, room: null, round: 0, rounds: 3, memes: [], votes: [], totals: new Map(), theme: null, players: [], assignments: new Map(), turnAdvance: null, voteAdvance: null, ownPacks: new Map(), collecting: false, voting: false, allMemes: [] }; // ownPacks: selfId -> [srv-Keys]
 
 /** Host: Caption aus einer „submit“-Nachricht in die laufende Runde übernehmen */
 export function handleHostSubmit(msg) {
+  if (!lanState.collecting) return; // späte Captions nach Ablauf der Runde ignorieren
   if (!msg?.selfId) return;
   const top = String(msg.top ?? '').slice(0, 200);
   const bottom = String(msg.bottom ?? '').slice(0, 200);
@@ -388,16 +389,6 @@ async function announceStart(msg) {
   app.append(el('div', { class: 'wrap phase-screen waiting' },
     el('div', { class: 'spinner-meme' }, '🎬'),
     el('h1', {}, 'Runde 1 beginnt gleich …'),
-  ));
-}
-
-function showWaiting(name) {
-  const app = document.getElementById('app');
-  app.innerHTML = '';
-  app.append(el('div', { class: 'wrap phase-screen waiting' },
-    el('div', { class: 'spinner-meme' }, '⏳'),
-    el('h1', {}, t('spiel.waiting') + ': ', el('strong', {}, name || '…')),
-    el('p', { style: 'color:var(--muted)' }, 'Gleich bist du dran.'),
   ));
 }
 
@@ -523,21 +514,36 @@ function doResult(msg) {
 function doFinal(msg) {
   confetti();
   const app = document.getElementById('app');
-  const medals = ['🥇', '🥈', '🥉', '4.', '5.', '6.', '7.', '8.'];
+  const medals = ['🥇', '🥈', '🥉'];
+  const bestCard = msg.best?.length ? el('div', { class: 'card', style: 'margin-top:14px' },
+    el('h2', {}, '🔥 ' + t('spiel.final.best')),
+    el('div', { class: 'vote-grid' },
+      ...msg.best.map((m) => {
+        const img = el('img', { alt: m.name });
+        (async () => {
+          const tpl = await resolveTpl(m.tplKey);
+          if (tpl) img.src = await renderMemeToDataUrl({ blob: tpl.blob, top: m.top, bottom: m.bottom });
+        })();
+        return el('div', { class: 'vote-card' }, img, el('div', { class: 'vote-meta' }, m.name, ' · ' + m.pts + ' P.'));
+      }),
+    ),
+  ) : null;
   app.innerHTML = '';
   app.append(el('div', { class: 'wrap phase-screen' },
     el('h1', {}, '👑 ' + t('spiel.final.title')),
     el('div', { class: 'card' },
+      el('h2', {}, '🏆 ' + t('spiel.final.podium')),
       el('div', { class: 'final-rank' },
         ...msg.standings.map((s, i) => el('div', { class: `final-row${i === 0 ? ' first' : ''}` },
-          el('span', { class: 'medal' }, medals[i]),
+          el('span', { class: 'medal' }, i < 3 ? medals[i] : `${i + 1}.`),
           s.name,
           el('span', { class: 'pts' }, String(s.pts) + (msg.relaxed ? '' : ' P.')),
         )),
       ),
-      el('div', { style: 'display:flex;gap:10px;justify-content:center' },
-        el('button', { class: 'btn', onclick: () => { location.hash = '#/'; } }, '🏠 ' + t('spiel.final.home')),
-      ),
+    ),
+    bestCard,
+    el('div', { style: 'display:flex;gap:10px;justify-content:center;margin-top:14px' },
+      el('button', { class: 'btn', onclick: () => { location.hash = '#/'; } }, '🏠 ' + t('spiel.final.home')),
     ),
   ));
 }
@@ -548,6 +554,9 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
   lanState.room = room;
   lanState.rounds = cfg.rounds;
   lanState.totals = new Map([...playersMap.keys()].map((id) => [id, 0]));
+  lanState.allMemes = [];
+  lanState.collecting = false;
+  lanState.voting = false;
   const playerList = [...playersMap.entries()].map(([id, name]) => ({ id, name }));
   if (playerList.length < 2) { toast('Mindestens 2 Spieler:innen nötig'); return; }
   lanState.players = playerList;
@@ -569,57 +578,58 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
       if (tpl) tpls[k] = await renderMemeToDataUrl({ blob: tpl.blob, top: '', bottom: '' }, 900);
     }
 
-    // Runden an den Host senden → Broadcast
-    // Turn-Phase
-    let i = 0;
-    function nextTurn() {
-      if (i >= playerList.length) { startVoting(); return; }
-      const p = playerList[i];
-      const tplKey = tplKeys[i];
-      i++;
+    // Turn-Phase: alle erstellen parallel, gemeinsames Zeitfenster
+    const until = Date.now() + cfg.timeSec * 1000;
+    lanState.collecting = true;
+    for (let i = 0; i < playerList.length; i++) {
       room.send({
-        type: 'turn', playerId: p.id, name: p.name, round: r,
-        theme, tplKey, tpls,
-        until: Date.now() + cfg.timeSec * 1000,
+        type: 'turn', playerId: playerList[i].id, name: playerList[i].name, round: r,
+        theme, tplKey: tplKeys[i], tpls, until,
       });
-      let moved = false;
-      const advance = () => { if (moved) return; moved = true; clearTimeout(timer); lanState.turnAdvance = null; nextTurn(); };
-      const timer = setTimeout(() => {
-        if (!lanState.memes.some((m) => m.playerId === p.id)) {
-          lanState.memes.push({ playerId: p.id, name: p.name, top: '', bottom: '', tplKey });
-        }
-        advance();
-      }, cfg.timeSec * 1000 + 400);
-      // Sobald die Caption dieser Person da ist, direkt weiter
-      lanState.turnAdvance = () => {
-        if (lanState.memes.some((m) => m.playerId === p.id)) advance();
-      };
     }
-    nextTurn();
+    let turnDone = false;
+    const finishTurn = () => {
+      if (turnDone) return;
+      turnDone = true;
+      lanState.collecting = false;
+      clearTimeout(turnTimer);
+      for (const p of playerList) {
+        if (!lanState.memes.some((m) => m.playerId === p.id)) {
+          lanState.memes.push({ playerId: p.id, name: p.name, top: '', bottom: '', tplKey: lanState.assignments.get(p.id) || null });
+        }
+      }
+      startVoting();
+    };
+    const turnTimer = setTimeout(finishTurn, cfg.timeSec * 1000 + 400);
+    // Wenn alle Captions da sind, geht es sofort ins Voting
+    lanState.turnAdvance = () => {
+      if (playerList.every((p) => lanState.memes.some((m) => m.playerId === p.id))) finishTurn();
+    };
 
     function startVoting() {
       const memes = lanState.memes.map((m) => ({ playerId: m.playerId, name: m.name, top: m.top, bottom: m.bottom, tplKey: m.tplKey }));
-      // Voting pro Spieler
-      let vi = 0;
-      function nextVote() {
-        if (vi >= playerList.length) { tally(); return; }
-        const v = playerList[vi]; vi++;
+      // Alle voten gleichzeitig
+      lanState.voting = true;
+      for (const v of playerList) {
         room.send({
           type: 'voting-start',
           myId: v.id, maxVotes: cfg.maxVotes || Math.max(1, playerList.length - 1),
           memes, tpls,
         });
-        let moved = false;
-        const advance = () => { if (moved) return; moved = true; clearTimeout(timer); lanState.voteAdvance = null; nextVote(); };
-        const timer = setTimeout(() => {
-          if (!lanState.votes.some((x) => x.selfId === v.id)) lanState.votes.push({ selfId: v.id, picks: [] });
-          advance();
-        }, (cfg.timeSec + 20) * 1000);
-        lanState.voteAdvance = () => {
-          if (lanState.votes.some((x) => x.selfId === v.id)) advance();
-        };
       }
-      nextVote();
+      let voteDone = false;
+      const finishVote = () => {
+        if (voteDone) return;
+        voteDone = true;
+        lanState.voting = false;
+        for (const v of playerList) if (!lanState.votes.some((x) => x.selfId === v.id)) lanState.votes.push({ selfId: v.id, picks: [] });
+        tally();
+      };
+      setTimeout(finishVote, (cfg.timeSec + 20) * 1000);
+      // Wenn alle abgestimmt haben, Auswertung sofort
+      lanState.voteAdvance = () => {
+        if (playerList.every((p) => lanState.votes.some((x) => x.selfId === p.id))) finishVote();
+      };
     }
 
     function tally() {
@@ -630,6 +640,7 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
         return { ...m, pts, voters };
       }).sort((a, b) => b.pts - a.pts);
 
+      lanState.allMemes.push(...scores);
       const isLast = r >= lanState.rounds;
       room.send({ type: 'result', round: r, rounds: lanState.rounds, scores });
 
@@ -638,7 +649,12 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
           const standings = playerList
             .map((p) => ({ id: p.id, name: p.name, pts: lanState.totals.get(p.id) || 0 }))
             .sort((a, b) => b.pts - a.pts);
-          room.send({ type: 'final', standings, relaxed: cfg.relaxed });
+          // Die besten 5 Memes des gesamten Spiels
+          const best = [...lanState.allMemes]
+            .sort((a, b) => b.pts - a.pts)
+            .slice(0, 5)
+            .map((m) => ({ playerId: m.playerId, name: m.name, top: m.top, bottom: m.bottom, tplKey: m.tplKey, pts: m.pts }));
+          room.send({ type: 'final', standings, relaxed: cfg.relaxed, best });
         } else {
           runRound(r + 1);
         }
@@ -651,6 +667,7 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
 };
 
 window.__lanHostVote = function (msg) {
+  if (!lanState.voting) return; // späte Stimmen nach der Auswertung ignorieren
   if (!lanState.votes.some((v) => v.selfId === msg.selfId)) {
     lanState.votes.push({ selfId: msg.selfId, picks: msg.picks || [] });
   }
