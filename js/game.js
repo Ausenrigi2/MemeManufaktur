@@ -225,7 +225,7 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
     }
 
     // Setup-Formular für Host in der Lobby
-    let cfg = { mode: 'random', relaxed: false, rounds: 3, timeSec: 90, maxVotes: 2, ownPacks: false };
+    let cfg = { mode: 'random', relaxed: false, rounds: 3, timeSec: 90, ownPacks: false };
     function setupControls() {
       const g = el('div', { class: 'card', style: 'max-width:560px;margin:14px auto' });
       const set = (k, v) => { cfg[k] = v; };
@@ -446,8 +446,8 @@ function doTurn(msg) {
 function doVote(msg) {
   if (msg.tpls) Object.assign(window.__lanTpls = window.__lanTpls || {}, msg.tpls);
   const app = document.getElementById('app');
-  let maxVotes = msg.maxVotes || 2;
-  const picks = new Set();
+  const ups = new Set(), downs = new Set();
+  let peak = null; // einmal pro Runde, bis zum Abgeben auf ein anderes Meme verschiebbar
   const grid = el('div', { class: 'vote-grid' });
   const cards = [];
   for (const m of msg.memes) {
@@ -458,31 +458,32 @@ function doVote(msg) {
       if (!tpl) return;
       img.src = await renderMemeToDataUrl({ blob: tpl.blob, top: m.top, bottom: m.bottom });
     })();
-    const card = el('div', { class: 'vote-card' }, img, el('div', { class: 'vote-meta' }, m.name));
-    card.addEventListener('click', () => toggle(card, m.playerId));
-    grid.append(card);
-    cards.push({ id: m.playerId, node: card });
+    const upB = el('button', { class: 'vbtn vbtn-up', title: t('spiel.vote.up') }, '👍');
+    const dnB = el('button', { class: 'vbtn vbtn-down', title: t('spiel.vote.down') }, '👎');
+    const pkB = el('button', { class: 'vbtn vbtn-peak', title: t('spiel.vote.peak') }, '⛰️ PEAK');
+    upB.addEventListener('click', (e) => { e.stopPropagation(); if (ups.has(m.playerId)) ups.delete(m.playerId); else { downs.delete(m.playerId); ups.add(m.playerId); } paint(); });
+    dnB.addEventListener('click', (e) => { e.stopPropagation(); if (downs.has(m.playerId)) downs.delete(m.playerId); else { ups.delete(m.playerId); downs.add(m.playerId); } paint(); });
+    pkB.addEventListener('click', (e) => { e.stopPropagation(); peak = peak === m.playerId ? null : m.playerId; paint(); });
+    grid.append(el('div', { class: 'vote-card' }, img, el('div', { class: 'vote-meta' }, m.name), el('div', { class: 'vote-btns' }, upB, dnB, pkB)));
+    cards.push({ id: m.playerId, up: upB, down: dnB, peak: pkB });
   }
-  const submitBtn = el('button', { class: 'btn btn-primary', disabled: true }, '🗳️ ' + t('spiel.vote.submit'));
-
-  function toggle(card, pid) {
-    if (picks.has(pid)) picks.delete(pid);
-    else {
-      if (picks.size >= maxVotes) { const first = cards.find((c) => c.id !== pid && picks.has(c.id)); if (first) picks.delete(first.id); }
-      picks.add(pid);
+  function paint() {
+    for (const c of cards) {
+      c.up.classList.toggle('active', ups.has(c.id));
+      c.down.classList.toggle('active', downs.has(c.id));
+      c.peak.classList.toggle('active', peak === c.id);
     }
-    cards.forEach((c) => c.node.classList.toggle('picked', picks.has(c.id)));
-    submitBtn.disabled = picks.size === 0;
   }
+  const submitBtn = el('button', { class: 'btn btn-primary' }, '🗳️ ' + t('spiel.vote.submit'));
   submitBtn.addEventListener('click', () => {
-    lanState.room.send({ type: 'vote', selfId: lanState.room.selfId, picks: [...picks] });
+    lanState.room.send({ type: 'vote', selfId: lanState.room.selfId, ups: [...ups], downs: [...downs], peak });
   });
 
   app.innerHTML = '';
   app.append(el('div', { class: 'wrap phase-screen' },
     el('h1', {}, t('spiel.vote.title')),
     el('div', { class: 'card turn-box' },
-      el('p', { style: 'font-weight:800' }, t('spiel.vote.hint', { n: maxVotes })),
+      el('p', { style: 'font-weight:800' }, t('spiel.vote.hint')),
       grid,
       el('div', { style: 'margin-top:16px' }, submitBtn),
     ),
@@ -500,7 +501,8 @@ function doResult(msg) {
     })();
     rows.append(el('div', { class: `result-row${s.pts === Math.max(...msg.scores.map((x) => x.pts)) && s.pts > 0 ? ' winner' : ''}` },
       img,
-      el('div', {}, el('div', { style: 'font-weight:800' }, s.name), el('div', { class: 'voters' }, s.voters.length ? '👍 ' + s.voters.join(', ') : '—')),
+      el('div', {}, el('div', { style: 'font-weight:800' }, s.name), el('div', { class: 'voters' },
+        [s.up?.length ? '👍 ' + s.up.join(', ') : null, s.down?.length ? '👎 ' + s.down.join(', ') : null, s.peaks ? '⛰️ ×' + s.peaks : null].filter(Boolean).join('  ·  ') || '—')),
       el('div', { class: 'pts' }, String(s.pts)),
     ));
   }
@@ -611,18 +613,14 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
       // Alle voten gleichzeitig
       lanState.voting = true;
       for (const v of playerList) {
-        room.send({
-          type: 'voting-start',
-          myId: v.id, maxVotes: cfg.maxVotes || Math.max(1, playerList.length - 1),
-          memes, tpls,
-        });
+        room.send({ type: 'voting-start', myId: v.id, memes, tpls });
       }
       let voteDone = false;
       const finishVote = () => {
         if (voteDone) return;
         voteDone = true;
         lanState.voting = false;
-        for (const v of playerList) if (!lanState.votes.some((x) => x.selfId === v.id)) lanState.votes.push({ selfId: v.id, picks: [] });
+        for (const v of playerList) if (!lanState.votes.some((x) => x.selfId === v.id)) lanState.votes.push({ selfId: v.id, ups: [], downs: [], peak: null });
         tally();
       };
       setTimeout(finishVote, (cfg.timeSec + 20) * 1000);
@@ -633,12 +631,24 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
     }
 
     function tally() {
+      // makeitmeme-Punkte: ±1000 relativ zur Spielerzahl (up − down), dazu +10 pro ⛰️ PEAK aufs Meme
+      const denom = Math.max(1, playerList.length - 1);
+      const nameOf = (id) => playerList.find((p) => p.id === id)?.name || '?';
+      const peakCount = {};
+      for (const v of lanState.votes) if (v.peak) peakCount[v.peak] = (peakCount[v.peak] || 0) + 1;
       const scores = lanState.memes.map((m) => {
-        const voters = lanState.votes.filter((v) => v.picks.includes(m.playerId)).map((v) => playerList.find((p) => p.id === v.selfId)?.name || '?');
-        const pts = voters.length;
-        if (!cfg.relaxed) lanState.totals.set(m.playerId, (lanState.totals.get(m.playerId) || 0) + pts);
-        return { ...m, pts, voters };
+        const up = lanState.votes.filter((v) => (v.ups || []).includes(m.playerId)).map((v) => nameOf(v.selfId));
+        const down = lanState.votes.filter((v) => (v.downs || []).includes(m.playerId)).map((v) => nameOf(v.selfId));
+        const peaks = peakCount[m.playerId] || 0;
+        const pts = Math.round(1000 * (up.length - down.length) / denom) + peaks * 10;
+        return { ...m, pts, up, down, peaks };
       }).sort((a, b) => b.pts - a.pts);
+      if (!cfg.relaxed) {
+        for (const s of scores) lanState.totals.set(s.playerId, (lanState.totals.get(s.playerId) || 0) + s.pts);
+        // Wer den PEAK gesetzt hat, bekommt die Hälfte des End-Scores dieses Memes (auch negativ)
+        const byId = new Map(scores.map((s) => [s.playerId, s]));
+        for (const v of lanState.votes) if (v.peak && byId.has(v.peak)) lanState.totals.set(v.selfId, (lanState.totals.get(v.selfId) || 0) + Math.round(byId.get(v.peak).pts / 2));
+      }
 
       lanState.allMemes.push(...scores);
       const isLast = r >= lanState.rounds;
@@ -669,7 +679,7 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
 window.__lanHostVote = function (msg) {
   if (!lanState.voting) return; // späte Stimmen nach der Auswertung ignorieren
   if (!lanState.votes.some((v) => v.selfId === msg.selfId)) {
-    lanState.votes.push({ selfId: msg.selfId, picks: msg.picks || [] });
+    lanState.votes.push({ selfId: msg.selfId, ups: msg.ups || [], downs: msg.downs || [], peak: msg.peak || null });
   }
   lanState.voteAdvance?.();
 };
