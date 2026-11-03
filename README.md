@@ -1,33 +1,36 @@
-# 🎨 MemeManufaktur
+# 🎨 MemeMacher
 
-Das **Make-it-Meme** als Partyspiel zum Selbsthosten – im Geist von
-[makeitmeme.com](https://makeitmeme.com/de/), aber komplett bei dir:
+A self-hostable **make-it-meme party game** — in the spirit of
+[makeitmeme.com](https://makeitmeme.com/en/), but yours:
 
-- 🖌️ **Meme-Studio**: Texte ziehen & skalieren, Outline, Highlight, Bildfilter,
-  PNG-/JPEG-Export und Zwischenablage-Kopie – alles lokal im Browser gerendert.
-- 📦 **Eigene Meme-Pakete**: Bilder hochladen, in Pakete sortieren, im Studio
-  und im Spiel verwenden. Lokal im Browser (IndexedDB) oder – wenn der Server
-  läuft – geteilt für alle am Netz.
-- 🎉 **Partyspiel**: Hot-Seat an einem Gerät oder echte **LAN-Partie mit
-  Raumcode** – Runden, Themes, Abstimmungen und Meme-König:innen-Thron.
-- 🌍 **Deutsch zuerst**, optional auf Englisch umschaltbar.
+- 🖌️ **Meme Studio** — drag & scale text, outline, highlight, image filters,
+  PNG/JPEG export and clipboard copy. Everything renders locally in your browser.
+- 📦 **Your own meme packs** — upload pictures, organize them into packs, use
+  them in the studio and in the game. Stored in your browser (IndexedDB) or,
+  when the server is running, shared with everyone on the network.
+- 🎉 **Party mode** — hot-seat on one device or a real **LAN match with an
+  invite code**: rounds, themes, voting and a meme-king coronation.
+- 🌍 **English first**, switchable to German in the UI.
 
-Kein Build-Schritt, keine Abhängigkeiten: Vanilla-JS-Module + ein
-zero-dependency Node-Server für LAN und geteilte Uploads.
+No build step, zero dependencies: vanilla ES modules + a zero-dependency
+Node server (≥ 18) that adds static hosting, a shared upload library and a
+hand-rolled WebSocket relay for LAN games.
 
-## Schnellstart
+| |
+| --- |
+| ![MemeMacher home page with live meme preview](assets/screenshot.png) |
 
-### 1) Vollmodus (empfohlen): Node-Server
+## Quickstart
+
+### 1) Full mode (recommended): Node server
 
 ```bash
 node server.js
 # → http://localhost:8080
 ```
 
-Freund:innen im selben Netz öffnen `http://<deine-ip>:8080`. Damit sind
-geteilte Bild-Bestände und LAN-Partien aktiv.
-
-Variante mit npm:
+Friends on the same network open `http://<your-ip>:8080` — the shared picture
+library and LAN matches are now active. Or via npm:
 
 ```bash
 npm start
@@ -40,66 +43,92 @@ docker compose up -d --build
 # → http://localhost:8080
 ```
 
-Uploads bleiben im Volume `meme-data` erhalten.
+Uploads persist in the named volume `meme-data` (mounted at `/app/data`).
 
-### 3) Nur statisch (Offline)
+### 3) Static only (offline)
 
-Beliebiger Webserver reicht, z. B.:
+Any webserver works, e.g.:
 
 ```bash
 python3 -m http.server 8080
-# oder: npx serve .
 ```
 
-Ohne Server läuft alles außer geteilten Uploads und dem LAN-Modus –
-die App erkennt das selbst (Badge in der Leiste: „Offline-Modus“).
+Without the server you lose only the shared uploads and LAN mode — the app
+detects this and shows an "Offline mode" badge.
 
-## Wo landen meine Bilder?
+## How a game runs
 
-| Modus | Speicherort |
+1. The host creates a room and gets a 4-character invite code.
+2. Everyone joins from their browser with that code.
+3. The host starts the rounds: each player writes a caption for their
+   template — against the clock.
+4. Everyone votes for the best memes, points flow, and after the final round
+   a meme royalty is crowned. Confetti included.
+
+The server only **relays messages**; all game logic runs client-side.
+
+## Where do my pictures go?
+
+| Mode | Storage |
 | --- | --- |
-| Lokal (Browser) | IndexedDB (`mememanufaktur`) – nur du siehst sie |
-| Geteilt (Server) | Ordner `./data/uploads` + Index `./data/library.json` |
+| Local (browser) | IndexedDB — only you can see them |
+| Shared (server) | `./data/uploads/` + index `./data/library.json` |
 
-„Auch auf dem Server speichern“ kannst du bei jedem Upload in der
-Pakete-Seite an- oder abschalten.
+"A also save to server" ("Auch auf dem Server speichern") can be toggled per
+upload on the Packs page.
 
-## Wie läuft eine Partie?
+## HTTP API & WebSocket
 
-1. Host erstellt einen Raum → 4-stelliger Einladungscode.
-2. Alle treten im Browser mit dem Code bei.
-3. Der Host startet die Runden: jede:r Spieler:in schreibt eine Caption
-   für ihr Template – gegen die Uhr.
-4. Alle voten für die besten Memes, Punkte fließen, nach den letzten
-   Runden wird gekrönt – Konfetti inklusive.
-
-Der Server relaid **nur** Nachrichten; alle Spiellogik läuft im Browser.
-
-## Projektstruktur
-
-```
-index.html          Einstiegspunkt (läuft auch statisch)
-css/styles.css      Design-System (Comic/Brutalist)
-js/lib.js           i18n (DE/EN), Utilities
-js/packs.js         Pakete-API (IndexedDB) + Server-API
-js/editor.js        MemeCanvas-Render-Engine
-js/ui-studio.js     Studio-Seite
-js/ui-packs.js      Pakete-Seite
-js/net.js           WebSocket-Client (Room)
-js/game.js          Partyspiel: Hot-Seat + LAN
-js/main.js          Router, Nav/Footer, Startseite, Hilfe
-server.js           Zero-Dep-Node-Server (Static, Uploads, WS-Relay)
-assets/templates/   Built-in SVG-Templates („Klassiker“-Paket)
-data/uploads/       Geteilte Bilder (wird angelegt)
-```
-
-## Ports & Umgebungsvariablen
-
-| Variable | Default | Bedeutung |
+| Endpoint | Method | Purpose |
 | --- | --- | --- |
-| `PORT` | `8080` | HTTP-Port |
-| `HOST` | `0.0.0.0` | Bind-Adresse |
+| `/health` | GET | Liveness check |
+| `/api/library` | GET | List shared templates |
+| `/api/upload` | POST | Create/update a template (JSON: `id`, `name`, `mime`, `data` as base64) |
+| `/api/library/:id` | DELETE | Remove a template |
+| `/uploads/:id` | GET | Fetch an uploaded image |
+| `/ws?room=CODE&name=NAME&self=ID` | WS | Game relay — join, roster, round state, votes |
+
+Limits: 25 MB per uploaded image, 8 MB per WebSocket message.
+
+## Configuration
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PORT` | `8080` | HTTP port |
+| `HOST` | `0.0.0.0` | Bind address |
+| `MEME_DATA_DIR` | `./data` | Data directory (uploads + library index) |
+
+## Project structure
+
+```
+index.html          Entry point (also works fully static)
+css/styles.css      Design system (comic/brutalist)
+js/lib.js           i18n (EN/DE), utilities
+js/packs.js         Pack API (IndexedDB) + server API client
+js/editor.js        MemeCanvas render engine
+js/ui-studio.js     Studio page
+js/ui-packs.js      Packs page
+js/net.js           WebSocket client (Room)
+js/game.js          Party game: hot-seat + LAN
+js/main.js          Router, nav/footer, home page, help
+server.js           Zero-dep Node server (static, uploads, WS relay)
+assets/templates/   Built-in SVG templates (the "Classics" pack)
+assets/screenshot.png  Home page screenshot (used in this README)
+test/smoke.mjs      API smoke tests (node:test)
+data/uploads/       Shared images (created automatically)
+```
+
+## Testing
+
+```bash
+npm test
+```
+
+Runs the dependency-free smoke suite (`node --test`) against an isolated data
+directory — covers health, static serving, upload round-trips, content-type
+hygiene and deletion.
 
 ---
 
-Ein Fan-Projekt – nicht mit makeitmeme.com verbunden. Deine Daten bleiben bei dir.
+Fan project in the spirit of makeitmeme.com — not affiliated with it.
+Your data stays where you host it.
