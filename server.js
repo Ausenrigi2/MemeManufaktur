@@ -16,7 +16,11 @@ const HOST = process.env.HOST || '0.0.0.0';
 const DATA_DIR = process.env.MEME_DATA_DIR || path.join(ROOT, 'data');
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 const LIBRARY_FILE = path.join(DATA_DIR, 'library.json');
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB pro Bild
+const USER_QUOTA_BYTES = Number(process.env.MEME_USER_QUOTA_BYTES || 250 * 1024 * 1024); // 250 MB pro Account
+const MAX_JSON_BODY = 64 * 1024;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const MAX_BODY_BYTES = Math.ceil(MAX_UPLOAD_BYTES * 4 / 3) + 1024 * 1024; // Base64-Puffer + JSON-Rahmen
 const MAX_WS_BYTES = 8 * 1024 * 1024;      // 8 MB pro WS-Nachricht
 // Client-Mimes, die beim Serven erlaubt sind – alles andere fällt auf den Dateityp zurück (XSS-Schutz)
@@ -42,32 +46,33 @@ const MIME = {
 
 function mimeOf(file) { return MIME[path.extname(file).toLowerCase()] || 'application/octet-stream'; }
 
-function json(res, status, obj) {
+function json(res, status, obj, extraHeaders = {}) {
   const body = JSON.stringify(obj);
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body), ...extraHeaders });
   res.end(body);
 }
 function notFound(res) { json(res, 404, { error: 'not found' }); }
 
-// ---------- Library (data/library.json) ----------
-async function readLibrary() {
-  try { return JSON.parse(await fs.readFile(LIBRARY_FILE, 'utf8')); } catch { return []; }
+// ---------- JSON-Stores (data/) ----------
+async function readJson(file) {
+  try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch { return []; }
 }
-// Serialisiert Read-Modify-Write und tauscht die Datei atomar (tmp+rename) aus:
+// Serialisiert Read-Modify-Write pro Datei und tauscht atomar (tmp+rename) aus:
 // parallele Uploads verlieren sich nicht gegenseitig, ein Crash mitten im Write
-// hinterlässt keine halbe library.json.
-let libQueue = Promise.resolve();
-async function updateLibrary(mutate) {
-  const job = libQueue.then(async () => {
-    const next = mutate(await readLibrary());
-    const tmp = `${LIBRARY_FILE}.tmp`;
+// hinterlässt keine halbe Datei.
+const writeQueues = new Map();
+async function updateJson(file, mutate) {
+  const job = (writeQueues.get(file) || Promise.resolve()).then(async () => {
+    const next = mutate(await readJson(file));
+    const tmp = `${file}.tmp`;
     await fs.writeFile(tmp, JSON.stringify(next, null, 2));
-    await fs.rename(tmp, LIBRARY_FILE);
+    await fs.rename(tmp, file);
     return next;
   });
-  libQueue = job.catch(() => {}); // Fehler gehen an den Caller, die Queue läuft weiter
+  writeQueues.set(file, job.catch(() => {})); // Fehler gehen an den Caller, die Queue läuft weiter
   return job;
 }
+const readLibrary = () => readJson(LIBRARY_FILE);
 
 function extForMime(mime) {
   switch ((mime || '').toLowerCase()) {
@@ -103,6 +108,96 @@ function readBody(req, limit) {
   });
 }
 
+// ---------- Accounts (E-Mail + Passwort, keine Verifizierung) ----------
+// Passwort wird mit scrypt (stdlib) gehasht; Session = Token im HttpOnly-Cookie.
+// shortcut: Sessions nur im Memory – nach Server-Neustart einmal neu einloggen.
+const sessions = new Map(); // token -> userId
+
+function hashPassword(pw, salt) { return crypto.scryptSync(pw, salt, 32).toString('hex'); }
+function verifyPassword(pw, stored) {
+  const [scheme, salt, hash] = String(stored).split('$');
+  if (scheme !== 'scrypt') return false;
+  const b = crypto.scryptSync(pw, salt, 32);
+  const a = Buffer.from(hash, 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+function cookieToken(req) {
+  const m = String(req.headers.cookie || '').match(/(?:^|;\s*)mm_sid=([0-9a-f]{48})/);
+  return m ? m[1] : null;
+}
+async function currentUser(req) {
+  const token = cookieToken(req);
+  const userId = token && sessions.get(token);
+  if (!userId) return null;
+  return (await readJson(USERS_FILE)).find((u) => u.id === userId) || null;
+}
+const publicUser = (u) => ({ id: u.id, email: u.email });
+function startSession(res, user) {
+  const token = crypto.randomBytes(24).toString('hex');
+  sessions.set(token, user.id);
+  return `mm_sid=${token}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax`;
+}
+
+async function readAuthBody(req) {
+  return JSON.parse((await readBody(req, MAX_JSON_BODY)).toString('utf8'));
+}
+
+async function handleRegister(req, res) {
+  let body;
+  try { body = await readAuthBody(req); } catch { return json(res, 400, { error: 'invalid json' }); }
+  const email = String(body.email || '').trim().toLowerCase().slice(0, 120);
+  const pw = String(body.password || '').slice(0, 200);
+  if (!EMAIL_RE.test(email)) return json(res, 400, { error: 'invalid email' });
+  if (pw.length < 8) return json(res, 400, { error: 'password too short (min. 8 characters)' });
+  if ((await readJson(USERS_FILE)).some((u) => u.email === email)) return json(res, 409, { error: 'email already registered' });
+  const salt = crypto.randomBytes(16).toString('hex');
+  const user = { id: crypto.randomUUID(), email, pw: `scrypt$${salt}$${hashPassword(pw, salt)}`, createdAt: Date.now() };
+  await updateJson(USERS_FILE, (list) => { if (!list.some((u) => u.email === email)) list.push(user); return list; });
+  return json(res, 200, { user: publicUser(user) }, { 'Set-Cookie': startSession(res, user) });
+}
+
+async function handleLogin(req, res) {
+  let body;
+  try { body = await readAuthBody(req); } catch { return json(res, 400, { error: 'invalid json' }); }
+  const email = String(body.email || '').trim().toLowerCase();
+  const pw = String(body.password || '');
+  const user = (await readJson(USERS_FILE)).find((u) => u.email === email);
+  if (!user || !verifyPassword(pw, user.pw)) return json(res, 401, { error: 'wrong email or password' });
+  return json(res, 200, { user: publicUser(user) }, { 'Set-Cookie': startSession(res, user) });
+}
+
+async function handleLogout(req, res) {
+  const token = cookieToken(req);
+  if (token) sessions.delete(token);
+  return json(res, 200, { ok: true }, { 'Set-Cookie': 'mm_sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax' });
+}
+
+async function handleMe(req, res) {
+  const user = await currentUser(req);
+  if (!user) return json(res, 401, { error: 'not signed in' });
+  const used = (await readLibrary()).reduce((s, x) => s + (x.owner === user.id ? (x.size || 0) : 0), 0);
+  return json(res, 200, { user: publicUser(user), used, quota: USER_QUOTA_BYTES });
+}
+
+// Voting: ein Vote pro Account pro Entry – wiederholtes Treffen hebt ihn auf.
+async function handleVote(req, res) {
+  let body;
+  try { body = await readAuthBody(req); } catch { return json(res, 400, { error: 'invalid json' }); }
+  const user = await currentUser(req);
+  if (!user) return json(res, 401, { error: 'not signed in' });
+  const id = String(body.id || '');
+  const entry = (await readLibrary()).find((x) => x.id === id);
+  if (!entry) return json(res, 404, { error: 'not found' });
+  const votes = entry.votes || [];
+  const next = votes.includes(user.id) ? votes.filter((x) => x !== user.id) : [...votes, user.id];
+  await updateJson(LIBRARY_FILE, (fresh) => {
+    const e = fresh.find((x) => x.id === id);
+    if (e) e.votes = next;
+    return fresh;
+  });
+  return json(res, 200, { ok: true, id, votes: next.length });
+}
+
 // ---------- API ----------
 async function handleUpload(req, res) {
   const raw = await readBody(req, MAX_BODY_BYTES);
@@ -116,14 +211,26 @@ async function handleUpload(req, res) {
   const buf = Buffer.from(body.data, 'base64');
   if (!buf.length || buf.length > MAX_UPLOAD_BYTES) return json(res, 413, { error: 'file too large' });
 
+  const user = await currentUser(req);
+  const lib0 = await readLibrary();
+  const existing = lib0.find((x) => x.id === id);
+  if (existing?.owner && existing.owner !== user?.id) return json(res, 403, { error: 'entry belongs to another account' });
+  // Neu oder eigener Überschrieb zählt zur quota; geteilte Entries bleiben geteilt.
+  const willOwn = user && (!existing || existing.owner === user.id);
+  if (willOwn) {
+    const used = lib0.reduce((s, x) => s + (x.owner === user.id ? (x.size || 0) : 0), 0);
+    const replace = existing?.owner === user.id ? (existing.size || 0) : 0;
+    if (used - replace + buf.length > USER_QUOTA_BYTES) return json(res, 413, { error: `quota exceeded (${Math.round(USER_QUOTA_BYTES / 1048576)} MB)` });
+  }
+
   const ext = extForMime(mime) || guessExt(buf);
   // Client-Mime wird nur zur Extension-Wahl genutzt; der gespeicherte/servte Type kommt aus unserer eigenen Map.
   const safeMime = MIME['.' + ext] || 'application/octet-stream';
   const file = path.join(UPLOADS_DIR, `${id}.${ext}`);
   await fs.writeFile(file, buf);
 
-  const entry = { id, name, mime: safeMime, ext, size: buf.length, createdAt: Date.now() };
-  await updateLibrary((lib) => {
+  const entry = { id, name, mime: safeMime, ext, size: buf.length, createdAt: Date.now(), owner: willOwn ? user.id : (existing?.owner || null), votes: existing?.votes || [] };
+  await updateJson(LIBRARY_FILE, (lib) => {
     const i = lib.findIndex((x) => x.id === id);
     if (i >= 0) lib[i] = { ...lib[i], ...entry, createdAt: lib[i].createdAt };
     else lib.push(entry);
@@ -132,9 +239,13 @@ async function handleUpload(req, res) {
   return json(res, 200, { ok: true, id });
 }
 
-async function handleDelete(id, res) {
+async function handleDelete(req, res, id) {
   const lib = await readLibrary();
   const entry = lib.find((x) => x.id === id);
+  if (entry?.owner) {
+    const user = await currentUser(req);
+    if (!user || entry.owner !== user.id) return json(res, 403, { error: 'entry belongs to another account' });
+  }
   const files = entry ? [path.join(UPLOADS_DIR, `${entry.id}.${entry.ext}`)] : [];
   if (!entry) {
     // Fallback: alle Dateien mit diesem Präfix entfernen
@@ -142,7 +253,7 @@ async function handleDelete(id, res) {
     for (const f of dir) if (f.startsWith(`${id}.`)) files.push(path.join(UPLOADS_DIR, f));
   }
   for (const f of files) await fs.unlink(f).catch(() => {});
-  if (entry) await updateLibrary((fresh) => fresh.filter((x) => x.id !== id));
+  if (entry) await updateJson(LIBRARY_FILE, (fresh) => fresh.filter((x) => x.id !== id));
   return json(res, 200, { ok: true });
 }
 
@@ -151,7 +262,13 @@ async function serveUpload(id, req, res) {
   let mime = null;
   const lib = await readLibrary();
   const entry = lib.find((x) => x.id === id);
-  if (entry) { file = path.join(UPLOADS_DIR, `${entry.id}.${entry.ext}`); mime = IMAGE_MIMES.has(entry.mime) ? entry.mime : null; }
+  if (entry) {
+    // Private Entries dürfen geladen werden, wenn ein Konto angemeldet ist:
+    // im Spiel sehen alle Spieler:innen die Memes der angebundenen eigenen Packs.
+    if (entry.owner && !(await currentUser(req))) return json(res, 401, { error: 'not signed in' });
+    file = path.join(UPLOADS_DIR, `${entry.id}.${entry.ext}`);
+    mime = IMAGE_MIMES.has(entry.mime) ? entry.mime : null;
+  }
   else {
     const dir = await fs.readdir(UPLOADS_DIR).catch(() => []);
     const f = dir.find((d) => d.startsWith(`${id}.`));
@@ -198,10 +315,24 @@ async function handleHttp(req, res) {
       if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });
       return json(res, 200, { ok: true, service: 'mememanufaktur' });
     }
-    if (p === '/api/library' && req.method === 'GET') return json(res, 200, await readLibrary());
+    if (p === '/api/library' && req.method === 'GET') {
+      // Gelistet werden nur geteilte Entries + die eigenen (Private bleibt privat;
+      // /uploads/ liefert eigene Bilder für die LAN-Runde weiterhin per ID.)
+      const user = await currentUser(req);
+      const lib = await readLibrary();
+      return json(res, 200, lib
+        .filter((x) => !x.owner || x.owner === user?.id)
+        .map((x) => ({ ...x, votes: x.votes || [], own: !!(user && x.owner === user.id) }))
+        .sort((a, b) => b.votes.length - a.votes.length));
+    }
+    if (p === '/api/vote' && req.method === 'POST') return await handleVote(req, res);
     if (p === '/api/upload' && req.method === 'POST') return await handleUpload(req, res);
+    if (p === '/api/register' && req.method === 'POST') return await handleRegister(req, res);
+    if (p === '/api/login' && req.method === 'POST') return await handleLogin(req, res);
+    if (p === '/api/logout' && req.method === 'POST') return await handleLogout(req, res);
+    if (p === '/api/me' && req.method === 'GET') return await handleMe(req, res);
     const delMatch = p.match(/^\/api\/library\/([^/]+)$/);
-    if (delMatch && req.method === 'DELETE') return await handleDelete(delMatch[1], res);
+    if (delMatch && req.method === 'DELETE') return await handleDelete(req, res, delMatch[1]);
     if (p.startsWith('/uploads/') && (req.method === 'GET' || req.method === 'HEAD')) return await serveUpload(p.slice('/uploads/'.length), req, res);
     if (req.method === 'GET' || req.method === 'HEAD') return await serveStatic(p, req, res);
     return json(res, 405, { error: 'method not allowed' });

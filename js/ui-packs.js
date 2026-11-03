@@ -118,7 +118,47 @@ export function openPacks() {
   const listWrap = el('div', { class: 'pack-grid' });
   const serverWrap = el('section');
 
+  // ---------- Account (optional – nur mit Server) ----------
+  function accountSection(meInfo) {
+    const card = el('div', { class: 'card account' }, el('h2', {}, '👤 ' + t('account.title')));
+    if (!ServerAPI.available) { card.append(el('p', { style: 'color:var(--muted)' }, t('account.needserver'))); return card; }
+    if (!meInfo) {
+      const email = el('input', { type: 'email', name: 'email', autocomplete: 'email', spellcheck: false, placeholder: 'you@example.com…' });
+      const pw = el('input', { type: 'password', name: 'password', autocomplete: 'new-password', minlength: 8 });
+      const act = async (fn) => { try { await fn.call(ServerAPI, email.value.trim(), pw.value); render(); } catch (e) { toast('⚠️ ' + e.message); } };
+      card.append(
+        el('p', { style: 'color:var(--muted)' }, t('account.lead')),
+        el('div', { class: 'fieldrow' },
+          el('div', { class: 'grow' }, el('label', {}, t('account.email')), email),
+          el('div', { class: 'grow' }, el('label', {}, t('account.password')), pw),
+        ),
+        el('div', { style: 'display:flex;gap:10px;flex-wrap:wrap' },
+          el('button', { class: 'btn btn-primary', type: 'button', onclick: () => act(ServerAPI.register) }, t('account.register')),
+          el('button', { class: 'btn', type: 'button', onclick: () => act(ServerAPI.login) }, t('account.login')),
+        ),
+      );
+    } else {
+      const pct = Math.min(100, Math.round((meInfo.used / meInfo.quota) * 100));
+      const mb = (n) => (n / (1024 * 1024)).toFixed(n < 1048576 ? 1 : 0);
+      card.append(
+        el('p', {}, t('account.who', { email: meInfo.user.email })),
+        el('div', { class: 'quota' },
+          el('div', { class: 'quota-track', role: 'meter', 'aria-valuemin': 0, 'aria-valuemax': meInfo.quota, 'aria-valuenow': meInfo.used, 'aria-label': t('account.quota', { used: mb(meInfo.used), max: mb(meInfo.quota) }) },
+            el('i', { style: `width:${pct}%` }),
+          ),
+          el('span', {}, t('account.quota', { used: mb(meInfo.used), max: mb(meInfo.quota) })),
+        ),
+        el('div', { style: 'display:flex;gap:10px;flex-wrap:wrap' },
+          el('button', { class: 'btn btn-red', type: 'button', onclick: async () => { await ServerAPI.logout(); render(); } }, t('account.logout')),
+        ),
+      );
+    }
+    return card;
+  }
+
   async function render() {
+    let meInfo = null;
+    if (ServerAPI.available) { try { meInfo = await ServerAPI.me(); } catch {} }
     const packs = await Packs.allPacks();
     packSelect.innerHTML = '';
     for (const p of packs) packSelect.append(el('option', { value: p.id }, p.name));
@@ -163,14 +203,31 @@ export function openPacks() {
           el('section', { style: 'padding-top:30px' },
             el('h2', {}, '🌐 ' + t('pakete.serverTitle')),
             el('p', { style: 'color:var(--muted);max-width:70ch' }, t('pakete.serverLead')),
+            meInfo ? null : el('p', { style: 'color:var(--muted);max-width:70ch' }, t('vote.hint')),
             el('div', { class: 'server-list' },
               ...items.map((s) => {
                 const img = el('img', { alt: s.name, loading: 'lazy' });
                 img.src = ServerAPI.url(s.id);
+                const n = s.votes.length;
+                const voted = !!(meInfo && s.votes.includes(meInfo.user.id));
+                const voteBtn = s.own ? null : el('button', { class: 'btn btn-sm vote', type: 'button', disabled: !meInfo, 'aria-pressed': String(voted), title: voted ? t('vote.undo') : t('vote.btn') }, '▲ ' + n);
+                if (voteBtn) {
+                  voteBtn.addEventListener('click', async () => {
+                    try {
+                      const d = await ServerAPI.vote(s.id);
+                      const now = !voted;
+                      voteBtn.setAttribute('aria-pressed', String(now));
+                      voteBtn.title = now ? t('vote.undo') : t('vote.btn');
+                      voteBtn.textContent = '▲ ' + d.votes;
+                    } catch (e) { toast('⚠️ ' + e.message); }
+                  });
+                }
                 return el('div', { class: 'server-tpl' },
                   img,
                   el('div', { style: 'padding:8px 10px;display:flex;justify-content:space-between;gap:6px;align-items:center;font-weight:700;font-size:0.85rem' },
                     s.name.slice(0, 24),
+                    s.own ? el('span', { class: 'badge-own' }, t('pakete.own')) : null,
+                    voteBtn,
                     el('button', { class: 'btn btn-icon btn-sm', title: 'Lokal entfernen', onclick: async () => { try { await ServerAPI.remove(s.id); render(); } catch { toast('⚠️ Server nicht erreichbar'); } } }, '✕'),
                   ),
                 );
@@ -185,6 +242,7 @@ export function openPacks() {
       el('div', { class: 'wrap' },
         el('h1', {}, t('pakete.title')),
         el('p', { style: 'color:var(--muted);max-width:70ch' }, t('pakete.lead')),
+        accountSection(meInfo),
         el('div', { class: 'card', style: 'margin-bottom:8px' },
           el('div', { class: 'fieldrow' },
             el('div', { class: 'grow' }, el('label', {}, 'Ziel-Paket'), packSelect),

@@ -163,14 +163,35 @@ export const Packs = {
 // ============ Server-API (optional, wenn Node-Server läuft) ============
 export const ServerAPI = {
   available: null,
+  user: null,
   async check() {
     try {
       const r = await fetch('/health', { cache: 'no-store' });
       if (!r.ok) return false;
       this.available = true;
+      await this.me(); // Session wiederherstellen (401 => nicht angemeldet)
       return true;
     } catch { this.available = false; return false; }
   },
+  async me() {
+    const r = await fetch('/api/me', { cache: 'no-store' });
+    if (r.status === 401) { this.user = null; return null; }
+    if (!r.ok) throw new Error('me');
+    const d = await r.json();
+    this.user = d.user;
+    return d; // { user, used, quota }
+  },
+  async post(path, body) {
+    const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || String(r.status));
+    if (d.user) this.user = d.user;
+    return d;
+  },
+  register(email, password) { return this.post('/api/register', { email, password }); },
+  login(email, password) { return this.post('/api/login', { email, password }); },
+  vote(id) { return this.post('/api/vote', { id }); },
+  async logout() { await this.post('/api/logout', {}); this.user = null; },
   async library() {
     const r = await fetch('/api/library', { cache: 'no-store' });
     if (!r.ok) throw new Error('library');

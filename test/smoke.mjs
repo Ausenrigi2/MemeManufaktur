@@ -1,6 +1,7 @@
 // ============ Smoke-Test (Zero-Dep): node --test ============
 // Deckt die API-Grenzen ab: Health, Statisch, Upload-Roundtrip,
-// Mime-Hygiene (Client-Mime landet nie als Content-Type), Fehlerpfade, Delete.
+// Mime-Hygiene (Client-Mime landet nie als Content-Type), Fehlerpfade, Delete,
+// Accounts (Register/Login/Me), Private-Sichtbarkeit, Quota, Voting.
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,6 +11,7 @@ import path from 'node:path';
 
 // Data-Verzeichnis isolieren, BEVOR server.js importiert wird
 process.env.MEME_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'mememanu-test-'));
+process.env.MEME_USER_QUOTA_BYTES = '120'; // kleiner Quota, damit der 413-Pfad testbar ist
 
 const { server } = await import('../server.js');
 
@@ -25,7 +27,9 @@ after(async () => {
 
 // 1×1-Pixel-PNG
 const PNG1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
-const post = (obj) => fetch(base + '/api/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj) });
+const PNG_BYTES = Buffer.from(PNG1, 'base64').length;
+const apiPost = (path, obj, cookie) => fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(cookie ? { cookie } : {}) }, body: JSON.stringify(obj) });
+const post = (obj, cookie) => apiPost('/api/upload', obj, cookie);
 
 test('GET /health meldet ok', async () => {
   const res = await fetch(base + '/health');
@@ -78,4 +82,73 @@ test('DELETE entfernt Upload aus Bibliothek und Disk', async () => {
   const lib = await (await fetch(base + '/api/library')).json();
   assert.ok(!lib.some((x) => x.id === id));
   assert.equal((await fetch(base + `/uploads/${id}`)).status, 404);
+});
+
+// ---------- Accounts + Voting ----------
+const auth = async (path, obj) => {
+  const res = await fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj) });
+  const m = (res.headers.get('set-cookie') || '').match(/mm_sid=([0-9a-f]{48})/);
+  return { status: res.status, d: await res.json().catch(() => ({})), cookie: m ? `mm_sid=${m[1]}` : null };
+};
+const getAs = (path, cookie) => fetch(base + path, { headers: cookie ? { cookie } : {} });
+
+test('Register validiert Eingaben und Lehnt Duplikate ab', async () => {
+  assert.equal((await auth('/api/register', { email: 'keine', password: 'geheim123' })).status, 400);
+  assert.equal((await auth('/api/register', { email: 'a@b.cc', password: 'kurz' })).status, 400);
+  const a = await auth('/api/register', { email: 'alice@test.dev', password: 'geheim123' });
+  assert.equal(a.status, 200);
+  assert.ok(a.cookie, 'Set-Cookie fehlt');
+  assert.equal((await auth('/api/register', { email: 'alice@test.dev', password: 'geheim123' })).status, 409);
+});
+
+test('Login: falsches PW 401, richtiges 200; /api/me ohne Cookie 401', async () => {
+  assert.equal((await auth('/api/login', { email: 'alice@test.dev', password: 'falsch123' })).status, 401);
+  const ok = await auth('/api/login', { email: 'alice@test.dev', password: 'geheim123' });
+  assert.equal(ok.status, 200);
+  assert.equal((await getAs('/api/me')).status, 401);
+  const me = await (await getAs('/api/me', ok.cookie)).json();
+  assert.equal(me.user.email, 'alice@test.dev');
+  assert.equal(me.quota, 120); // env-Quota wird durchgereicht
+});
+
+test('Private Entries: nur für den Eigentümer sichtbar', async () => {
+  const a = await auth('/api/login', { email: 'alice@test.dev', password: 'geheim123' });
+  const id = 'smoke_own_' + Math.random().toString(36).slice(2, 8);
+  assert.equal((await post({ id, data: PNG1 }, a.cookie)).status, 200);
+  const own = await (await getAs('/api/library', a.cookie)).json();
+  assert.ok(own.some((x) => x.id === id && x.own === true), 'eigener Eintrag fehlt');
+  const anon = await (await getAs('/api/library')).json();
+  assert.ok(!anon.some((x) => x.id === id), 'privater Eintrag für Anonymous sichtbar');
+  assert.equal((await getAs(`/uploads/${id}`, a.cookie)).status, 200);
+  assert.equal((await getAs(`/uploads/${id}`)).status, 401); // privat braucht Session
+});
+
+test('Quota: zweite Upload über Grenze -> 413', async () => {
+  const a = await auth('/api/login', { email: 'alice@test.dev', password: 'geheim123' });
+  const me = await (await getAs('/api/me', a.cookie)).json();
+  assert.ok(me.used >= PNG_BYTES && me.used <= 120, 'used-Berechnung unplausibel');
+  assert.equal((await post({ id: 'smoke_q2_' + Math.random().toString(36).slice(2, 8), data: PNG1 }, a.cookie)).status, 413);
+});
+
+test('Voting: Konto nötig, Toggle pro Account, Sortierung nach Stimmen', async () => {
+  const c = await auth('/api/register', { email: 'carol@test.dev', password: 'geheim123' });
+  const id = 'smoke_vote_' + Math.random().toString(36).slice(2, 8);
+  assert.equal((await post({ id, data: PNG1 }, c.cookie)).status, 200);
+  assert.equal((await apiPost('/api/vote', { id })).status, 401); // ohne Konto: keine Stimme
+  const v1 = await apiPost('/api/vote', { id }, c.cookie);
+  assert.equal((await v1.json()).votes, 1);
+  const list = await (await getAs('/api/library', c.cookie)).json();
+  assert.equal(list[0].id, id, 'meistgestimmter Entry muss oben stehen');
+  const v2 = await apiPost('/api/vote', { id }, c.cookie);
+  assert.equal((await v2.json()).votes, 0); // nochmal treffen = entvotescht
+});
+
+test('Delete: fremde private Entries nur vom Eigentümer', async () => {
+  const b = await auth('/api/register', { email: 'bob@test.dev', password: 'geheim123' });
+  const id = 'smoke_own2_' + Math.random().toString(36).slice(2, 8);
+  assert.equal((await post({ id, data: PNG1 }, b.cookie)).status, 200);
+  const del = (cookie) => fetch(base + `/api/library/${id}`, { method: 'DELETE', headers: cookie ? { cookie } : {} });
+  assert.equal((await del()).status, 403); // anonymous: gehört bob
+  assert.equal((await del('mm_sid=' + 'f'.repeat(48))).status, 403); //Session unbekannt -> anonymous
+  assert.equal((await del(b.cookie)).status, 200);
 });

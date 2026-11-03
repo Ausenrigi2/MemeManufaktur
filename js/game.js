@@ -40,26 +40,31 @@ export async function resolveTpl(key) {
   if (!key) return null;
   if (window.__lanTpls?.[key]) {
     const res = await fetch(window.__lanTpls[key]);
+    if (!res.ok) return null;
     return { blob: await res.blob(), name: key };
   }
   if (key.startsWith('srv:')) {
     const res = await fetch(ServerAPI.url(key.slice(4)));
+    if (!res.ok) return null;
     return { blob: await res.blob(), name: key };
   }
   const tpl = await Packs.getTemplate(key);
   return tpl ? { blob: tpl.blob, name: tpl.name } : null;
 }
 
-async function pickTemplates(count, mode) {
+async function pickTemplates(count, mode, idList = [], ownPools = null) {
   const all = await Packs.allTemplates();
-  if (!all.length) throw new Error('Keine Templates – erst Bilder in Pakete hochladen.');
+  // ownPools: pro Spieler eigene Keys ('srv:...') – nur wenn der Host sie erlaubt.
+  const needPool = !ownPools || idList.some((id) => !ownPools.get(id)?.length);
+  if (!all.length && needPool) throw new Error('Keine Templates – erst Bilder in Pakete hochladen.');
   const pool = shuffle(all);
-  if (mode === 'same') {
-    const one = pool[0].id;
-    return Array.from({ length: count }, () => one);
-  }
   const out = [];
-  for (let i = 0; i < count; i++) out.push(pool[i % pool.length].id);
+  for (let i = 0; i < count; i++) {
+    // 'same' behält bewusst EIN gemeinsames Template – eigene Packs gelten nur in random/theme
+    const own = ownPools && mode !== 'same' ? ownPools.get(idList[i]) : null;
+    if (own?.length) { out.push(rand(own)); continue; }
+    out.push(mode === 'same' ? pool[0].id : pool[i % pool.length].id);
+  }
   return out;
 }
 
@@ -432,6 +437,7 @@ function enterLobby({ code, host, name, statusEl }) {
     let myId = room.selfId;
     let leftGame = false;
     let startedFlag = false; // true sobald „start“ im Raum angekommen ist
+    let ownKeys = []; // eigene Server-Keys dieser Person ('srv:...')
     lanState.room = room;
 
     function setStatus(msg) { if (statusEl) statusEl.textContent = msg; }
@@ -453,6 +459,8 @@ function enterLobby({ code, host, name, statusEl }) {
         chipsWrap.append(el('span', { class: 'chip' }, id === myId ? '⭐ ' : '', pname));
       }
       if (!players.size) chipsWrap.append(el('span', { style: 'color:var(--muted)' }, t('spiel.lobby.wait')));
+      if (ownKeys.length && cfg.ownPacks) lobbyCard.append(el('p', { style: 'color:var(--muted);font-size:0.85rem;margin-top:10px' }, t('spiel.ownPacks.use')));
+      if (cfg.ownPacks) lobbyCard.append(el('p', { style: 'color:var(--muted);font-size:0.85rem;margin-top:10px' }, t('spiel.ownPacks.on')));
       if (hostId === myId) {
         lobbyCard.append(el('div', { style: 'display:flex;gap:10px;margin-top:16px;flex-wrap:wrap' },
           el('button', { class: 'btn btn-primary', onclick: () => startFromLobby() }, '🚀 ' + t('spiel.start')),
@@ -468,7 +476,7 @@ function enterLobby({ code, host, name, statusEl }) {
     }
 
     // Setup-Formular für Host in der Lobby
-    let cfg = { mode: 'random', relaxed: false, rounds: 3, timeSec: 60, maxVotes: 2 };
+    let cfg = { mode: 'random', relaxed: false, rounds: 3, timeSec: 60, maxVotes: 2, ownPacks: false };
     function setupControls() {
       const g = el('div', { class: 'card', style: 'max-width:560px;margin:14px auto' });
       const set = (k, v) => { cfg[k] = v; };
@@ -486,10 +494,13 @@ function enterLobby({ code, host, name, statusEl }) {
       roundsIn.addEventListener('input', () => set('rounds', Math.max(1, Number(roundsIn.value) || 3)));
       const timeIn = el('input', { type: 'number', min: 15, max: 300, step: 5, value: 60, style: { width: '90px' } });
       timeIn.addEventListener('input', () => set('timeSec', Math.max(15, Number(timeIn.value) || 60)));
+      const ownChk = el('input', { type: 'checkbox' });
+      ownChk.addEventListener('change', () => set('ownPacks', ownChk.checked));
       g.append(
         el('h3', {}, t('spiel.setup.t')),
         radios,
         el('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:10px' }, rel, el('span', {}, t('spiel.relaxed'))),
+        el('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:10px' }, ownChk, el('span', {}, t('spiel.ownPacks'))),
         el('div', { class: 'fieldrow', style: 'margin-top:10px' },
           el('div', {}, el('label', {}, t('spiel.rounds')), roundsIn),
           el('div', {}, el('label', {}, t('spiel.time')), timeIn),
@@ -511,13 +522,27 @@ function enterLobby({ code, host, name, statusEl }) {
       location.hash = '#/';
     }
 
+    async function sendOwnPack() {
+      try {
+        const me = await ServerAPI.me();
+        if (!me) return;
+        const items = await ServerAPI.library();
+        ownKeys = items.filter((x) => x.own).map((x) => 'srv:' + x.id);
+        if (ownKeys.length) room.send({ type: 'ownpack', selfId: myId, tpls: ownKeys });
+      } catch {}
+    }
+
     room.onStatus((s) => {
       if (s === 'closed') setStatus('⚠️ ' + t('spiel.lan.error'));
+      else if (s === 'open' && ownKeys.length) room.send({ type: 'ownpack', selfId: myId, tpls: ownKeys });
     });
 
     room.onMessage(async (msg) => {
       if (leftGame) return;
       switch (msg.type) {
+        case 'ownpack':
+          if (hostId === myId) { lanState.ownPacks.set(msg.selfId, msg.tpls || []); renderLobby(); }
+          break;
         case 'roster':
           players.clear();
           for (const p of msg.players) players.set(p.selfId, p.name);
@@ -577,6 +602,7 @@ function enterLobby({ code, host, name, statusEl }) {
 
     room.connect();
     room.send({ type: 'hello', selfId: myId, name });
+    sendOwnPack();
 
     // Host-Logik in derselben Closure – über Modulebene erreichbar:
     function startFromLobby() { window.__lanHostStart(cfg, room, players, myId); }
@@ -585,7 +611,7 @@ function enterLobby({ code, host, name, statusEl }) {
 }
 
 // ---------- LAN Host/Guest-Phasen (auf Modulebene, da Closure-Shared-State nötig) ----------
-const lanState = { cfg: null, room: null, round: 0, rounds: 3, memes: [], votes: [], totals: new Map(), theme: null, players: [], assignments: new Map(), turnAdvance: null, voteAdvance: null };
+const lanState = { cfg: null, room: null, round: 0, rounds: 3, memes: [], votes: [], totals: new Map(), theme: null, players: [], assignments: new Map(), turnAdvance: null, voteAdvance: null, ownPacks: new Map() }; // ownPacks: selfId -> [srv-Keys]
 
 /** Host: Caption aus einer „submit“-Nachricht in die laufende Runde übernehmen */
 export function handleHostSubmit(msg) {
@@ -784,7 +810,7 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
     const theme = cfg.mode === 'theme' ? THEMES[(r * 7) % THEMES.length] : null;
     lanState.theme = theme;
     let tplKeys;
-    try { tplKeys = await pickTemplates(playerList.length, cfg.mode); } catch (e) { toast(e.message); return; }
+    try { tplKeys = await pickTemplates(playerList.length, cfg.mode, playerList.map((p) => p.id), cfg.ownPacks ? lanState.ownPacks : null); } catch (e) { toast(e.message); return; }
     lanState.assignments = new Map(playerList.map((p, i) => [p.id, tplKeys[i]]));
 
     // DataURLs für Gäste

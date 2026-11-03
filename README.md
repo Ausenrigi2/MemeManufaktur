@@ -1,7 +1,6 @@
 # 🎨 MemeMacher
 
-A self-hostable **make-it-meme party game** — in the spirit of
-[makeitmeme.com](https://makeitmeme.com/en/), but yours:
+A self-hostable **meme party game** — your instance, your design, your data:
 
 - 🖌️ **Meme Studio** — drag & scale text, outline, highlight, image filters,
   PNG/JPEG export and clipboard copy. Everything renders locally in your browser.
@@ -10,6 +9,11 @@ A self-hostable **make-it-meme party game** — in the spirit of
   when the server is running, shared with everyone on the network.
 - 🎉 **Party mode** — hot-seat on one device or a real **LAN match with an
   invite code**: rounds, themes, voting and a meme-king coronation.
+- 👤 **Accounts (optional)** — sign up with email + password, no verification.
+  Each account gets its own server storage up to **250 MB**; in a LAN match,
+  the host can allow players to attach their own packs.
+- 🗳️ **Community voting** — upvote memes in the shared library from your
+  account (one vote per account, toggleable); the list is sorted by votes.
 - 🌍 **English first**, switchable to German in the UI.
 
 No build step, zero dependencies: vanilla ES modules + a zero-dependency
@@ -73,22 +77,28 @@ The server only **relays messages**; all game logic runs client-side.
 | --- | --- |
 | Local (browser) | IndexedDB — only you can see them |
 | Shared (server) | `./data/uploads/` + index `./data/library.json` |
+| With an account | Server storage, private to your account (up to 250 MB per account); accounts need the Node server |
 
 "A also save to server" ("Auch auf dem Server speichern") can be toggled per
-upload on the Packs page.
+upload on the Packs page. In LAN matches, the host can allow players to use
+their own (private) packs.
 
 ## HTTP API & WebSocket
 
 | Endpoint | Method | Purpose |
 | --- | --- | --- |
 | `/health` | GET | Liveness check |
-| `/api/library` | GET | List shared templates |
+| `/api/register` | POST | Create an account (JSON: `email`, `password`; no verification) |
+| `/api/login`, `/api/logout` | POST | Session via `HttpOnly` cookie |
+| `/api/me` | GET | Current user + storage usage |
+| `/api/library` | GET | Shared templates + your own, sorted by votes (private entries only for their owner) |
+| `/api/vote` | POST | Toggle your upvote on an entry (JSON: `id`; needs a session) |
 | `/api/upload` | POST | Create/update a template (JSON: `id`, `name`, `mime`, `data` as base64) |
-| `/api/library/:id` | DELETE | Remove a template |
+| `/api/library/:id` | DELETE | Remove a template (own entries only by their owner) |
 | `/uploads/:id` | GET | Fetch an uploaded image |
 | `/ws?room=CODE&name=NAME&self=ID` | WS | Game relay — join, roster, round state, votes |
 
-Limits: 25 MB per uploaded image, 8 MB per WebSocket message.
+Limits: 25 MB per uploaded image, 250 MB per account, 8 MB per WebSocket message.
 
 ## Configuration
 
@@ -97,6 +107,7 @@ Limits: 25 MB per uploaded image, 8 MB per WebSocket message.
 | `PORT` | `8080` | HTTP port |
 | `HOST` | `0.0.0.0` | Bind address |
 | `MEME_DATA_DIR` | `./data` | Data directory (uploads + library index) |
+| `MEME_USER_QUOTA_BYTES` | `262144000` | Storage quota per account (250 MB) |
 
 ## Project structure
 
@@ -126,9 +137,8 @@ npm test
 
 Runs the dependency-free smoke suite (`node --test`) against an isolated data
 directory — covers health, static serving, upload round-trips, content-type
-hygiene and deletion.
+hygiene, deletion, accounts, private visibility, the storage quota and voting.
 
 ---
 
-Fan project in the spirit of makeitmeme.com — not affiliated with it.
 Your data stays where you host it.

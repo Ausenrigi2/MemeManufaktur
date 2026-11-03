@@ -24,7 +24,7 @@ export const I18N = {
     'server.on': 'Server verbunden',
     'server.off': 'Offline-Modus',
     'home.badge': 'Self-Hosted · Offline-fähig',
-    'home.title': 'Make it Meme – jetzt bei dir zu Hause.',
+    'home.title': 'Meme-Partyspiel – jetzt bei dir zu Hause.',
     'home.lead': 'Das Meme-Partyspiel zum Selbsthosten: Templates wählen, Caption schreiben, abstimmen, lachen. Mit deinen eigenen Bildern und Meme-Paketen – alles bleibt auf deinem Server oder in deinem Browser.',
     'home.cta.quick': 'Schnelles Spiel',
     'home.cta.private': 'Privates Spiel (LAN)',
@@ -35,7 +35,7 @@ export const I18N = {
     'home.feat2.t': 'Deine Pakete',
     'home.feat2.d': 'Bilder hochladen, in Pakete sortieren, im Studio und im Spiel verwenden. Speichert lokal im Browser oder auf deinem Server.',
     'home.feat3.t': 'Party-Modus',
-    'home.feat3.d': 'Hot-Seat am einen Gerät oder eine echte LAN-Partie mit Raumcode – Runden, Themes und Abstimmungen wie im Original.',
+    'home.feat3.d': 'Hot-Seat am einen Gerät oder eine echte LAN-Partie mit Raumcode – Runden, Themes, Voting und die Meme-König-Kürung.',
     'home.steps.t': 'So läuft eine Runde',
     'home.step1': 'Alle Spieler geben ihre Caption für ihr Template ab – gegen die Uhr.',
     'home.step2': 'Jede Stimme zählt: alle voten für die besten Memes der Runde.',
@@ -94,6 +94,23 @@ export const I18N = {
     'pakete.empty': 'Dieses Paket ist leer – lade Bilder hoch!',
     'pakete.confirmDelTpl': 'Diese Vorlage wirklich entfernen?',
     'pakete.confirmDelPack': 'Paket samt Zuordnung löschen? (Die Bilder bleiben erhalten.)',
+    'pakete.own': 'Meins',
+    'vote.btn': 'Abstimmen',
+    'vote.undo': 'Vote zurücknehmen',
+    'vote.hint': 'Abstimmen braucht ein Konto – oben anmelden oder erstellen.',
+    'account.title': 'Dein Konto',
+    'account.lead': 'Ohne Verifizierung – E-Mail und Passwort reichen. Dein eigenes Pack bleibt bis 250 MB auf dem Server, private Bilder siehst nur du.',
+    'account.email': 'E-Mail',
+    'account.password': 'Passwort',
+    'account.register': 'Konto erstellen',
+    'account.login': 'Anmelden',
+    'account.logout': 'Abmelden',
+    'account.who': 'Angemeldet als {email}',
+    'account.quota': '{used} von {max} MB genutzt',
+    'account.needserver': 'Das Konto braucht den Node-Server – ohne Server bleiben Pakete nur in deinem Browser.',
+    'spiel.ownPacks': 'Eigene Packs der Spieler:innen erlauben',
+    'spiel.ownPacks.on': 'Eigene Packs sind erlaubt – angemeldete Spieler:innen werden automatisch angebunden.',
+    'spiel.ownPacks.use': 'Dein eigenes Pack ist angebunden.',
     'spiel.title': 'Meme-Partie',
     'spiel.setup.t': 'Partie einrichten',
     'spiel.players': 'Spieler:innen',
@@ -152,7 +169,7 @@ export const I18N = {
     'help.q4': 'Gibt es eine mobile App?',
     'help.a4': 'Die Seite ist responsive – Handy und Tablet laufen direkt im Browser. Für echte Apps fehlt noch eine Hülle, aber die HTML-Cache-Techniken sind vorbereitet.',
     'footer.left': 'Selbst gehostet · Deine Daten bleiben bei dir',
-    'footer.right': 'Ein Fan-Projekt im Geist von makeitmeme.com',
+    'footer.right': 'Kein Build · null Dependencies',
     'ui.cancel': 'Abbrechen',
     'ui.create': 'Anlegen',
     'ui.save': 'Speichern',
@@ -167,7 +184,7 @@ export const I18N = {
     'server.on': 'Server connected',
     'server.off': 'Offline mode',
     'home.badge': 'Self-hosted · works offline',
-    'home.title': 'Make it Meme – but at yours, at home.',
+    'home.title': 'The meme party game – self-hosted, at yours.',
     'home.lead': 'The meme party game you self-host: pick a template, write the caption, vote, laugh. With your own pictures and meme packs – everything stays on your server or in your browser.',
     'home.cta.quick': 'Quick game',
     'home.cta.private': 'Private game (LAN)',
@@ -178,7 +195,7 @@ export const I18N = {
     'home.feat2.t': 'Your packs',
     'home.feat2.d': 'Upload your own pictures, organize them into packs, use them in studio and in the game. Stored in your browser or on your server.',
     'home.feat3.t': 'Party mode',
-    'home.feat3.d': 'Hot-seat on one device or a real LAN match with room code – rounds, themes and voting like the original.',
+    'home.feat3.d': 'Hot-seat on one device or a real LAN match with room code – rounds, themes, voting and the meme-king coronation.',
     'home.steps.t': 'How a round goes',
     'home.step1': 'Every player submits a caption for their template – against the clock.',
     'home.step2': 'All votes count: everyone picks the best memes of the round.',
@@ -237,6 +254,23 @@ export const I18N = {
     'pakete.empty': 'This pack is empty – upload some pictures!',
     'pakete.confirmDelTpl': 'Remove this template?',
     'pakete.confirmDelPack': 'Delete pack? (The images are kept.)',
+    'pakete.own': 'Mine',
+    'vote.btn': 'Vote',
+    'vote.undo': 'Undo vote',
+    'vote.hint': 'Voting needs an account – sign in above.',
+    'account.title': 'Your account',
+    'account.lead': 'No verification – email and password are enough. Your own pack stays on the server up to 250 MB; private pictures are visible to you only.',
+    'account.email': 'Email',
+    'account.password': 'Password',
+    'account.register': 'Create account',
+    'account.login': 'Sign in',
+    'account.logout': 'Sign out',
+    'account.who': 'Signed in as {email}',
+    'account.quota': '{used} of {max} MB used',
+    'account.needserver': 'The account needs the Node server – without it, packs stay in your browser only.',
+    'spiel.ownPacks': 'Allow players to use their own packs',
+    'spiel.ownPacks.on': 'Own packs are allowed – signed-in players are attached automatically.',
+    'spiel.ownPacks.use': 'Your own pack is attached.',
     'spiel.title': 'Meme Party',
     'spiel.setup.t': 'Set up the match',
     'spiel.players': 'Players',
@@ -295,7 +329,7 @@ export const I18N = {
     'help.q4': 'Is there a mobile app?',
     'help.a4': 'The site is responsive – phones and tablets work right in the browser. A real app shell is still missing, but the webapp plumbing is ready.',
     'footer.left': 'Self-hosted · Your data stays with you',
-    'footer.right': 'A fan project in the spirit of makeitmeme.com',
+    'footer.right': 'No build · zero dependencies',
     'ui.cancel': 'Cancel',
     'ui.create': 'Create',
     'ui.save': 'Save',
@@ -327,7 +361,7 @@ export function el(tag, attrs = {}, ...children) {
 
 export function toast(msg, ms = 2600) {
   document.querySelectorAll('.toast').forEach((n) => n.remove());
-  const n = el('div', { class: 'toast' }, msg);
+  const n = el('div', { class: 'toast', 'aria-live': 'polite' }, msg);
   document.body.append(n);
   setTimeout(() => n.remove(), ms);
 }
@@ -350,9 +384,10 @@ export function roomCode() {
 export function confetti(durationMs = 2800) {
   const cv = document.getElementById('confetti');
   if (!cv) return;
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   const ctx = cv.getContext('2d');
   cv.width = innerWidth; cv.height = innerHeight;
-  const colors = ['#FFC93C', '#FF4A2A', '#2E5BFF', '#2FBF71', '#FF6FA5', '#14163F'];
+  const colors = ['#F4B63F', '#E0484F', '#2D6FD8', '#19A877', '#D9489B'];
   const parts = Array.from({ length: 140 }, () => ({
     x: Math.random() * cv.width, y: -20 - Math.random() * cv.height * 0.3,
     w: 6 + Math.random() * 8, h: 8 + Math.random() * 10,
