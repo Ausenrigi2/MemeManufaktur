@@ -326,6 +326,11 @@ async function handleHttp(req, res) {
         .sort((a, b) => b.votes.length - a.votes.length));
     }
     if (p === '/api/vote' && req.method === 'POST') return await handleVote(req, res);
+    if (p === '/api/lobbies' && req.method === 'GET') {
+      return json(res, 200, [...lobbyMeta.values()]
+        .filter((m) => m.public && rooms.get(m.code)?.size)
+        .map((m) => ({ code: m.code, name: m.name, players: rooms.get(m.code).size })));
+    }
     if (p === '/api/upload' && req.method === 'POST') return await handleUpload(req, res);
     if (p === '/api/register' && req.method === 'POST') return await handleRegister(req, res);
     if (p === '/api/login' && req.method === 'POST') return await handleLogin(req, res);
@@ -347,6 +352,7 @@ async function handleHttp(req, res) {
 const server = http.createServer(handleHttp);
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const rooms = new Map(); // Raumcode -> Set<sock>
+const lobbyMeta = new Map(); // Raumcode -> { code, name, public } – für die öffentliche Lobby-Liste
 
 function encodeFrame(str) {
   const payload = Buffer.from(String(str), 'utf8');
@@ -446,7 +452,7 @@ function leaveRoom(sock) {
   if (!room) return;
   room.delete(sock);
   broadcastJson(sock.code, { type: 'left', selfId: sock.selfId });
-  if (!room.size) rooms.delete(sock.code);
+  if (!room.size) { rooms.delete(sock.code); lobbyMeta.delete(sock.code); }
 }
 
 server.on('upgrade', (req, socket) => {
@@ -476,6 +482,10 @@ server.on('upgrade', (req, socket) => {
   let room = rooms.get(code) || new Set();
   rooms.set(code, room);
   room.add(sock);
+  if (!lobbyMeta.has(code)) {
+    // Die erste Verbindung definiert den Raum (Name + Sichtbarkeit); spätere respektieren das
+    lobbyMeta.set(code, { code, name: String(u.searchParams.get('lobby') || '').slice(0, 40) || null, public: u.searchParams.get('pub') === '1' });
+  }
 
   // Neue Verbindung bekommt zuerst den kompletten Raum-Bestand (Reihenfolge = Beitrittsreihenfolge)
   const roster = [...room].map((s) => ({ selfId: s.selfId, name: s.name }));

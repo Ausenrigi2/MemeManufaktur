@@ -192,6 +192,11 @@ export const ServerAPI = {
   login(email, password) { return this.post('/api/login', { email, password }); },
   vote(id) { return this.post('/api/vote', { id }); },
   async logout() { await this.post('/api/logout', {}); this.user = null; },
+  async lobbies() {
+    const r = await fetch('/api/lobbies', { cache: 'no-store' });
+    if (!r.ok) throw new Error('lobbies');
+    return r.json();
+  },
   async library() {
     const r = await fetch('/api/library', { cache: 'no-store' });
     if (!r.ok) throw new Error('library');

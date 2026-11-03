@@ -1,11 +1,12 @@
 // ============ Smoke-Test (Zero-Dep): node --test ============
 // Deckt die API-Grenzen ab: Health, Statisch, Upload-Roundtrip,
 // Mime-Hygiene (Client-Mime landet nie als Content-Type), Fehlerpfade, Delete,
-// Accounts (Register/Login/Me), Private-Sichtbarkeit, Quota, Voting.
+// Accounts (Register/Login/Me), Private-Sichtbarkeit, Quota, Voting, Lobbys.
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -141,6 +142,28 @@ test('Voting: Konto nötig, Toggle pro Account, Sortierung nach Stimmen', async 
   assert.equal(list[0].id, id, 'meistgestimmter Entry muss oben stehen');
   const v2 = await apiPost('/api/vote', { id }, c.cookie);
   assert.equal((await v2.json()).votes, 0); // nochmal treffen = entvotescht
+});
+
+test('Lobbys: nur öffentliche werden gelistet, leere fallen raus', async () => {
+  // Node 20 hat keinen globalen WebSocket-Client – hier reicht das Upgrade-Handshake,
+  // weil der Raum schon bei der Verbindung registriert wird.
+  const openWs = (q) => new Promise((resolve) => {
+    const req = http.get(base + '/ws?' + q, { headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Key': 'AAAAAAAAAAAAAAAAAAAAAA==', 'Sec-WebSocket-Version': '13' } }, (res) => resolve(res));
+    req.on('upgrade', (res) => resolve(res)); // Node feuert bei 101 'upgrade', nicht 'response'
+    req.on('error', () => resolve(null));
+  });
+  const pub = await openWs('room=LPUB&lobby=Testlobby&pub=1&name=Host');
+  const priv = await openWs('room=LPRIV&name=Gast');
+  assert.equal(pub.statusCode, 101);
+  assert.equal(priv.statusCode, 101);
+  const list = await (await fetch(base + '/api/lobbies')).json();
+  const entry = list.find((l) => l.code === 'LPUB');
+  assert.ok(entry && entry.name === 'Testlobby' && entry.players === 1, 'öffentliche Lobby fehlt');
+  assert.ok(!list.some((l) => l.code === 'LPRIV'), 'private Lobby darf nicht gelistet sein');
+  pub.socket.destroy();
+  priv.socket.destroy();
+  await new Promise((r) => setTimeout(r, 200)); // close-Handler auslaufen lassen
+  assert.ok(!((await (await fetch(base + '/api/lobbies')).json()).some((l) => l.code === 'LPUB')), 'leere Lobby muss aus der Liste fallen');
 });
 
 test('Delete: fremde private Entries nur vom Eigentümer', async () => {

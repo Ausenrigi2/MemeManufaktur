@@ -1,4 +1,4 @@
-// ============ Meme-Partie: Views + Hot-Seat + LAN ============
+// ============ Meme-Partie: Lobby + Spiel-Phasen ============
 import { el, t, rand, shuffle, toast, confetti, roomCode, uid } from './lib.js';
 import { MemeCanvas, renderMemeToDataUrl } from './editor.js';
 import { Packs, ServerAPI } from './packs.js';
@@ -92,346 +92,90 @@ function livePreview(canvas, tplBlob) {
 }
 
 // ============ Gemeinsame Views ============
-export function renderSetup(container, { local, onBack }) {
+// ============ Lobby (erstellen + beitreten) ============
+export async function openLobby(container) {
   container.innerHTML = '';
-  const players = [
-    { id: uid('p'), name: 'Spieler:in 1' },
-    { id: uid('p'), name: 'Spieler:in 2' },
-  ];
-  const maxVotes = () => Math.max(1, Math.min(3, players.length - 1));
-
-  const chipsWrap = el('div', { class: 'player-chips' });
-  const relaxedCheck = el('input', { type: 'checkbox' });
-  const roundsInput = el('input', { type: 'number', min: 1, max: 8, value: 3, style: { width: '90px' } });
-  const timeInput = el('input', { type: 'number', min: 15, max: 300, step: 5, value: 60, style: { width: '110px' } });
-
-  function refreshChips() {
-    chipsWrap.innerHTML = '';
-    players.forEach((p, i) => {
-      chipsWrap.append(el('span', { class: 'chip' },
-        p.name,
-        players.length > 2 ? el('button', { title: 'Entfernen', onclick: () => { players.splice(i, 1); refreshChips(); } }, '✕') : null,
-      ));
-    });
-  }
-  refreshChips();
-
-  const addBtn = el('button', { class: 'btn btn-sm', onclick: () => {
-    if (players.length >= 8) return;
-    players.push({ id: uid('p'), name: `Spieler:in ${players.length + 1}` });
-    refreshChips();
-  } }, '+ ' + t('spiel.addPlayer'));
-
-  const startBtn = el('button', { class: 'btn btn-primary', onclick: () => {
-    const modeEl = document.querySelector('input[name="mode"]:checked');
-    const cfg = {
-      mode: modeEl ? modeEl.value : 'random',
-      relaxed: relaxedCheck.checked,
-      rounds: Math.max(1, Number(roundsInput.value) || 3),
-      timeSec: Math.max(15, Number(timeInput.value) || 60),
-      maxVotes: maxVotes(),
-    };
-    onBack && onBack();
-    onLocalStart(players, cfg);
-  } }, '🚀 ' + t('spiel.start'));
-
-  const modeLabels = [];
-  function syncModeCards() {
-    for (const l of modeLabels) l.classList.toggle('selected', l.querySelector('input').checked);
-  }
-  const modeCards = ['random', 'same', 'theme'].map((m) => {
-    const label = el('label', { class: 'mode-card' },
-      el('input', { type: 'radio', name: 'mode', value: m, ...(m === 'random' ? { checked: 'checked' } : {}) }),
-      el('div', {},
-        el('div', {}, t(`spiel.modes.${m}`)),
-        el('div', { style: 'font-weight:500;font-size:0.85rem;color:var(--muted)' }, t(`spiel.modes.${m}.d`)),
-      ),
-    );
-    label.querySelector('input').addEventListener('change', syncModeCards);
-    modeLabels.push(label);
-    return label;
-  });
-  syncModeCards();
-
-  container.append(
-    el('div', { class: 'wrap game-grid' },
-      el('div', { class: 'card' },
-        el('h2', {}, t('spiel.setup.t')),
-        el('label', {}, t('spiel.players')),
-        chipsWrap,
-        el('div', { style: 'margin-bottom:16px' }, addBtn),
-        el('label', {}, t('spiel.mode')),
-        el('div', { class: 'mode-cards' }, ...modeCards),
-        el('div', { style: 'margin-top:14px;display:flex;gap:8px;align-items:center' },
-          relaxedCheck, el('span', {}, t('spiel.relaxed')),
-        ),
-        el('div', { class: 'fieldrow', style: 'margin-top:14px' },
-          el('div', {}, el('label', {}, t('spiel.rounds')), roundsInput),
-          el('div', {}, el('label', {}, t('spiel.time')), timeInput),
-        ),
-      ),
-      el('div', { class: 'card' },
-        el('h2', {}, 'So geht\u2019s'),
-        el('ol', { style: 'padding-left:20px' },
-          el('li', {}, 'Alle Spieler:innen am Gerät durchklicken – Caption gegen die Uhr.'),
-          el('li', {}, 'Danach voten alle für die besten Memes der Runde.'),
-          el('li', {}, 'Nach den letzten Runden: Meme-König:innen-Thron und Konfetti.'),
-        ),
-        local ? el('div', { style: 'margin-top:18px;display:flex;gap:10px;flex-wrap:wrap' }, startBtn) : null,
-      ),
-    ),
-  );
-}
-
-// ============ Hot-Seat (ein Gerät) ============
-function onLocalStart(players, cfg) {
-  runLocalGame(players, cfg);
-}
-
-async function runLocalGame(players, cfg) {
-  const app = document.getElementById('app');
-  const totals = new Map(players.map((p) => [p.id, 0]));
-  const maxVotes = cfg.maxVotes || Math.max(1, players.length - 1);
-  let aborted = false;
-
-  function show(title, contentEl) {
-    app.innerHTML = '';
-    app.append(el('div', { class: 'wrap phase-screen' },
-      el('h1', {}, title),
-      contentEl,
-    ));
-  }
-
-  function passGate(name) {
-    return new Promise((resolve) => {
-      const gate = el('div', { class: 'card', style: 'max-width:520px;margin:0 auto;text-align:left' },
-        el('h3', {}, '📱 ' + t('spiel.turn.pass') + ': ' + name),
-        el('button', { class: 'btn btn-primary', onclick: () => resolve() }, '▶ ' + t('spiel.turn.continue')),
-      );
-      app.innerHTML = '';
-      app.append(el('div', { class: 'wrap phase-screen' },
-        el('div', { class: 'spinner-meme' }, '📱'),
-        gate,
-      ));
-    });
-  }
-
-  async function votePhase(voter, memes) {
-    return new Promise((resolve) => {
-      const picks = new Set();
-      const grid = el('div', { class: 'vote-grid' });
-      const cards = [];
-      for (const m of memes) {
-        if (m.playerId === voter.id) continue;
-        const img = el('img', { alt: m.name });
-        renderMemeToDataUrl({ blob: m.blob, top: m.top, bottom: m.bottom }).then((u) => { img.src = u; });
-        const card = el('div', { class: 'vote-card', role: 'button', tabindex: 0 },
-          img,
-          el('div', { class: 'vote-meta' }, m.name, el('span', { style: 'color:var(--blue)' }, '☑️')),
-        );
-        const toggle = () => {
-          if (picks.has(m.playerId)) picks.delete(m.playerId);
-          else {
-            if (picks.size >= maxVotes) picks.delete(cards.find((c) => c.id !== m.playerId && picks.has(c.id))?.id || [...picks][0]);
-            picks.add(m.playerId);
-          }
-          grid.querySelectorAll('.vote-card').forEach((c) => c.classList.toggle('picked', false));
-          cards.forEach((c) => c.node.classList.toggle('picked', picks.has(c.id)));
-        };
-        card.addEventListener('click', toggle);
-        card.addEventListener('keydown', (e) => { if (e.key === 'Enter') toggle(); });
-        grid.append(card);
-        cards.push({ id: m.playerId, node: card });
-      }
-      const hintEl = el('p', { style: 'font-weight:800' }, t('spiel.vote.hint', { n: maxVotes }));
-      const submitBtn = el('button', { class: 'btn btn-primary', disabled: true }, '🗳️ ' + t('spiel.vote.submit'));
-      grid.addEventListener('click', () => { submitBtn.disabled = picks.size === 0; });
-      cards.forEach((c) => c.node.addEventListener('click', () => { submitBtn.disabled = picks.size === 0; }));
-      submitBtn.addEventListener('click', () => resolve([...picks]));
-
-      show(t('spiel.vote.title'), el('div', { class: 'card turn-box' },
-        el('h3', {}, voter.name + ', ' + t('spiel.vote.title').toLowerCase()),
-        hintEl, grid,
-        el('div', { style: 'margin-top:16px;display:flex;gap:10px' }, submitBtn),
-      ));
-    });
-  }
-
-  let roundNo = 0;
-  for (let r = 1; r <= cfg.rounds; r++) {
-    if (aborted) return;
-    roundNo = r;
-    const theme = cfg.mode === 'theme' ? THEMES[(r * 7) % THEMES.length] : null;
-    // Templates zuweisen
-    const keys = await pickTemplates(players.length, cfg.mode);
-    const blobs = [];
-    for (const k of keys) blobs.push((await resolveTpl(k)).blob);
-
-    const memes = [];
-    for (let i = 0; i < players.length; i++) {
-      const p = players[i];
-      await passGate(p.name);
-      const cap = await new Promise((res) => {
-        // turnPhase renderen und abwarten
-        runTurn(p, theme, blobs[i], res);
-      });
-      memes.push({ playerId: p.id, name: p.name, blob: blobs[i], top: cap.top, bottom: cap.bottom });
-    }
-
-    // Abstimmung
-    const votes = [];
-    for (const v of players) {
-      const picked = await votePhase(v, memes);
-      votes.push({ voterId: v.id, voterName: v.name, picks: picked });
-    }
-
-    // Auswertung
-    const scores = memes.map((m) => {
-      const who = votes.filter((v) => v.picks.includes(m.playerId)).map((v) => v.voterName);
-      const pts = who.length;
-      if (!cfg.relaxed) totals.set(m.playerId, (totals.get(m.playerId) || 0) + pts);
-      return { ...m, pts, voters: who };
-    }).sort((a, b) => b.pts - a.pts);
-
-    await resultPhase(r, scores, cfg);
-  }
-
-  if (!aborted) await finalPhase(players, totals, cfg);
-
-  function resultPhase(r, scores, cfg2) {
-    return new Promise((resolve) => {
-      show(`${t('spiel.result.title')} · ${r}/${cfg2.rounds}`, el('div', { class: 'card turn-box' },
-        el('div', { class: 'result-list' },
-          ...scores.map((s, i) => {
-            const img = el('img', { alt: s.name });
-            renderMemeToDataUrl({ blob: s.blob, top: s.top, bottom: s.bottom }).then((u) => { img.src = u; });
-            return el('div', { class: `result-row${i === 0 && s.pts > 0 ? ' winner' : ''}` },
-              img,
-              el('div', {},
-                el('div', { style: 'font-weight:800' }, s.name),
-                el('div', { class: 'voters' }, s.voters.length ? '👍 ' + s.voters.join(', ') : '—'),
-              ),
-              el('div', { class: 'pts' }, String(s.pts)),
-            );
-          }),
-        ),
-        el('div', { style: 'margin-top:18px;display:flex;gap:10px' },
-          el('button', { class: 'btn btn-primary', onclick: () => resolve() }, r < cfg2.rounds ? '▶ ' + t('spiel.result.next') : '🏆 ' + t('spiel.final.title')),
-        ),
-      ));
-    });
-  }
-
-  function finalPhase(playersArr, totals, cfg3) {
-    return new Promise((resolve) => {
-      confetti();
-      const ranked = [...playersArr].sort((a, b) => (totals.get(b.id) || 0) - (totals.get(a.id) || 0));
-      const medals = ['🥇', '🥈', '🥉', '4.', '5.', '6.', '7.', '8.'];
-      show('👑 ' + t('spiel.final.title'), el('div', { class: 'card' },
-        el('div', { class: 'final-rank' },
-          ...ranked.map((p, i) => el('div', { class: `final-row${i === 0 ? ' first' : ''}` },
-            el('span', { class: 'medal' }, medals[i]),
-            p.name,
-            el('span', { class: 'pts' }, String(totals.get(p.id) || 0) + (cfg3.relaxed ? '' : ' P.')),
-          )),
-        ),
-        el('div', { style: 'display:flex;gap:10px;justify-content:center;flex-wrap:wrap' },
-          el('button', { class: 'btn btn-primary', onclick: () => { confetti(); window.dispatchEvent(new CustomEvent('mm:goto', { detail: '#/spiel' })); } }, '🔁 ' + t('spiel.final.again')),
-          el('button', { class: 'btn', onclick: () => { location.hash = '#/'; } }, '🏠 ' + t('spiel.final.home')),
-        ),
-      ));
-    });
-  }
-
-  // turnPhase wrapper
-  async function runTurn(player, theme, tplBlob, doneCb) {
-    app.innerHTML = '';
-    let settled = false;
-    const finish = (top, bottom) => { if (!settled) { settled = true; doneCb({ top, bottom }); } };
-
-    const canvas = el('canvas', { width: 640, height: 640 });
-    const preview = livePreview(canvas, tplBlob);
-    const topIn = el('textarea', { rows: 2, placeholder: t('spiel.turn.top') });
-    const botIn = el('textarea', { rows: 2, placeholder: t('spiel.turn.bottom') });
-    const timerWrap = el('div', { class: 'timerbar' }, el('i'));
-    const submitBtn = el('button', { class: 'btn btn-green', onclick: () => finish(topIn.value, botIn.value) }, '✅ ' + t('spiel.turn.submit'));
-    const inspoBtn = el('button', { class: 'btn btn-sm', onclick: () => {
-      topIn.value = rand(INSPO_TOPS); botIn.value = rand(INSPO_BOTTOMS);
-      preview.set(topIn.value, botIn.value);
-    } }, '💡 ' + t('spiel.turn.inspo'));
-
-    const upd = () => preview.set(topIn.value, botIn.value);
-    topIn.addEventListener('input', upd);
-    botIn.addEventListener('input', upd);
-
-    app.append(el('div', { class: 'wrap phase-screen' },
-      el('h1', {}, `${player.name}${theme ? ` · 🎭 ${theme}` : ''}`),
-      el('div', { class: 'turn-box card' },
-        el('div', { class: 'meme-preview' }, canvas),
-        el('label', {}, t('spiel.turn.top')), topIn,
-        el('label', { style: 'margin-top:10px' }, t('spiel.turn.bottom')), botIn,
-        timerWrap,
-        el('div', { style: 'display:flex;gap:10px;flex-wrap:wrap' }, submitBtn, inspoBtn),
-      ),
-    ));
-
-    let left = cfg.timeSec;
-    const startedAt = Date.now();
-    const iv = setInterval(() => {
-      if (settled) return clearInterval(iv);
-      left = Math.max(0, cfg.timeSec - Math.floor((Date.now() - startedAt) / 1000));
-      timerWrap.firstElementChild.style.width = (left / cfg.timeSec) * 100 + '%';
-      timerWrap.classList.toggle('warn', left <= 10);
-      if (left <= 0) { clearInterval(iv); finish(topIn.value, botIn.value); }
-    }, 250);
-  }
-}
-
-// ============ LAN-Partie ============
-export async function openLanSetup(container) {
-  container.innerHTML = '';
-  const nameInput = el('input', { type: 'text', placeholder: t('spiel.yourName'), value: 'Gast_' + Math.floor(Math.random() * 900 + 100) });
-  const codeInput = el('input', { type: 'text', maxlength: 4, style: { width: '110px', textTransform: 'uppercase' } });
-  const statusEl = el('p', { style: 'font-weight:700;color:var(--muted)' });
-
   if (!ServerAPI.available) {
-    statusEl.textContent = '⚠️ ' + t('spiel.lan.needserver');
-  } else {
-    statusEl.textContent = '🟢 ' + t('spiel.lan.connected');
+    container.append(el('div', { class: 'card', style: 'max-width:560px' },
+      el('h2', {}, t('lobby.title')),
+      el('p', { style: 'color:var(--muted)' }, t('lobby.needserver')),
+    ));
+    return;
   }
 
-  async function startHost() {
-    const codeStr = roomCode();
-    await enterLobby({ code: codeStr, host: true, name: nameInput.value.trim() || 'Host', statusEl });
+  const nameInput = el('input', { type: 'text', name: 'name', autocomplete: 'name', value: 'Gast_' + Math.floor(Math.random() * 900 + 100) });
+  const lobbyInput = el('input', { type: 'text', name: 'lobby' });
+  const codeInput = el('input', { type: 'text', name: 'code', maxlength: 4, style: 'width:110px;text-transform:uppercase' });
+  const statusEl = el('p', { style: 'font-weight:700;color:var(--muted)', 'aria-live': 'polite', hidden: true });
+  let poll = null;
+
+  async function join(code, opts) {
+    const name = nameInput.value.trim();
+    if (!name) { toast(t('spiel.yourName')); return; }
+    clearInterval(poll);
+    await enterLobby({ code, host: !!opts.host, name, statusEl, lobby: opts.lobby, pub: !!opts.pub });
   }
-  async function joinRoom() {
-    const codeStr = codeInput.value.trim().toUpperCase();
-    if (!/^[A-Z0-9]{4}$/.test(codeStr)) { toast('Code hat 4 Zeichen'); return; }
-    if (!nameInput.value.trim()) { toast(t('spiel.yourName')); return; }
-    await enterLobby({ code: codeStr, host: false, name: nameInput.value.trim(), statusEl });
+
+  function createLobby() {
+    const vis = document.querySelector('input[name="vis"]:checked')?.value || 'public';
+    join(roomCode(), { host: true, pub: vis === 'public', lobby: lobbyInput.value.trim() || null });
   }
+  function joinByCode() {
+    const code = codeInput.value.trim().toUpperCase();
+    if (!/^[A-Z0-9]{4}$/.test(code)) { toast(t('lobby.codeBad')); return; }
+    join(code, {});
+  }
+
+  const listWrap = el('div', { class: 'lobby-list' });
+  async function renderLobbies() {
+    let list = [];
+    try { list = await ServerAPI.lobbies(); } catch { return; }
+    listWrap.innerHTML = '';
+    if (!list.length) { listWrap.append(el('p', { style: 'color:var(--muted)' }, t('lobby.noOpen'))); return; }
+    for (const l of list) {
+      listWrap.append(el('div', { class: 'lobby-row' },
+        el('span', {}, (l.name || l.code) + ' · ' + t('lobby.playersIn', { n: l.players })),
+        el('button', { class: 'btn btn-sm btn-blue', type: 'button', onclick: () => join(l.code, { pub: true }) }, '→ ' + t('lobby.join')),
+      ));
+    }
+  }
+
+  const visCards = ['public', 'private'].map((v) => el('label', { class: 'mode-card' },
+    el('input', { type: 'radio', name: 'vis', value: v, ...(v === 'public' ? { checked: 'checked' } : {}) }),
+    el('span', {}, t('lobby.' + v)),
+  ));
 
   container.append(
     el('div', { class: 'wrap game-grid' },
       el('div', { class: 'card' },
-        el('h2', {}, t('spiel.lan') + ' · ' + t('spiel.createRoom')),
+        el('h2', {}, t('lobby.create')),
         el('label', {}, t('spiel.yourName')), nameInput,
-        el('div', { style: 'margin-top:16px' }, el('button', { class: 'btn btn-primary', onclick: startHost, disabled: !ServerAPI.available }, '🏠 ' + t('spiel.createRoom'))),
+        el('div', { class: 'fieldrow', style: 'margin-top:12px' },
+          el('div', { class: 'grow' }, el('label', {}, t('lobby.name')), lobbyInput),
+        ),
+        el('label', {}, t('lobby.visibility')),
+        el('div', { class: 'mode-cards' }, ...visCards),
+        el('div', { style: 'margin-top:16px' }, el('button', { class: 'btn btn-primary', type: 'button', onclick: createLobby }, '🚀 ' + t('lobby.create'))),
       ),
       el('div', { class: 'card' },
-        el('h2', {}, t('spiel.lan') + ' · ' + t('spiel.joinRoom')),
-        el('label', {}, t('spiel.roomCode')), codeInput,
-        el('div', { style: 'margin-top:16px' }, el('button', { class: 'btn btn-blue', onclick: joinRoom, disabled: !ServerAPI.available }, '🔑 ' + t('spiel.joinRoom'))),
-        el('div', { style: 'margin-top:14px' }, statusEl),
+        el('h2', {}, t('lobby.openList')),
+        listWrap,
+        el('h3', { style: 'margin-top:18px' }, t('lobby.byCode')),
+        el('div', { class: 'fieldrow' }, codeInput, el('button', { class: 'btn btn-blue', type: 'button', onclick: joinByCode }, '🔑 ' + t('lobby.join'))),
+        statusEl,
       ),
     ),
   );
+
+  renderLobbies();
+  // shortcut: polling alle 5s, wenn die Lobby-Liste lebt; upgrade auf WS-Push, wenn Live-Updates gefordert sind
+  poll = setInterval(() => { if (!container.isConnected) return clearInterval(poll); renderLobbies(); }, 5000);
 }
 
-function enterLobby({ code, host, name, statusEl }) {
+function enterLobby({ code, host, name, statusEl, lobby, pub }) {
   return new Promise((resolve) => {
     const app = document.getElementById('app');
-    const room = new Room(code, name);
+    const room = new Room(code, name, { lobby, pub });
     const players = new Map(); // selfId -> name
     let hostId = null;
     let myId = room.selfId;
@@ -440,7 +184,12 @@ function enterLobby({ code, host, name, statusEl }) {
     let ownKeys = []; // eigene Server-Keys dieser Person ('srv:...')
     lanState.room = room;
 
-    function setStatus(msg) { if (statusEl) statusEl.textContent = msg; }
+    function setStatus(msg) {
+      if (!statusEl) return;
+      statusEl.textContent = msg;
+      statusEl.hidden = false;
+      if (!statusEl.isConnected) lobbyCard.append(statusEl); // nach dem Beitreten ist statusEl nicht mehr im DOM
+    }
 
     const chipsWrap = el('div', { class: 'player-chips' });
     const lobbyCard = el('div', { class: 'card', style: 'max-width:560px;margin:26px auto' });
@@ -533,7 +282,7 @@ function enterLobby({ code, host, name, statusEl }) {
     }
 
     room.onStatus((s) => {
-      if (s === 'closed') setStatus('⚠️ ' + t('spiel.lan.error'));
+      if (s === 'closed') setStatus('⚠️ ' + t('lobby.error'));
       else if (s === 'open' && ownKeys.length) room.send({ type: 'ownpack', selfId: myId, tpls: ownKeys });
     });
 

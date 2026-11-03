@@ -2,10 +2,12 @@
 import { uid } from './lib.js';
 
 export class Room {
-  constructor(code, name) {
+  constructor(code, name, opts = {}) {
     this.code = code.toUpperCase();
     this.selfId = uid('ply');
     this.name = name;
+    this.lobby = opts.lobby || '';
+    this.pub = !!opts.pub;
     this.ws = null;
     this.state = 'closed'; // closed | connecting | open
     this.listeners = new Set();
@@ -22,7 +24,7 @@ export class Room {
   connect() {
     if (this.state === 'open' || this.state === 'connecting') return;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${proto}://${location.host}/ws?room=${encodeURIComponent(this.code)}&name=${encodeURIComponent(this.name)}&self=${encodeURIComponent(this.selfId)}`;
+    const url = `${proto}://${location.host}/ws?room=${encodeURIComponent(this.code)}&name=${encodeURIComponent(this.name)}&self=${encodeURIComponent(this.selfId)}&pub=${this.pub ? '1' : '0'}${this.lobby ? '&lobby=' + encodeURIComponent(this.lobby) : ''}`;
     this._setStatus('connecting');
     const ws = new WebSocket(url);
     this.ws = ws;
