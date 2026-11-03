@@ -128,6 +128,7 @@ export class MemeCanvas {
     const fs = Math.max(8, l.fontSize);
     ctx.font = `${font.weight} ${fs}px ${font.stack}`;
     ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center'; // cx-Berechnung unten setzt Zentrierung voraus (Default wäre "start")
     ctx.lineJoin = 'round';
     ctx.miterLimit = 2;
     const maxWidth = this.cw * 0.92;
