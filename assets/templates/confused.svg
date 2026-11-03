@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="640" viewBox="0 0 640 640">
+  <rect width="640" height="640" fill="#FDFBF3"/>
+  <text x="480" y="235" text-anchor="middle" font-family="'Arial Black',system-ui,sans-serif" font-size="230" font-weight="900" fill="#FFC93C" stroke="#14163F" stroke-width="10" paint-order="stroke">?</text>
+  <path d="M150 525 L218 432" stroke="#F2C9A0" stroke-width="36" stroke-linecap="round"/>
+  <circle cx="230" cy="416" r="26" fill="#F2C9A0" stroke="#14163F" stroke-width="8"/>
+  <circle cx="280" cy="310" r="100" fill="#F2C9A0" stroke="#14163F" stroke-width="10"/>
+  <path d="M185 282 Q190 188 280 186 Q372 188 378 280 Q340 238 280 238 Q220 238 185 282 Z" fill="#2A2C45" stroke="#14163F" stroke-width="8" stroke-linejoin="round"/>
+  <circle cx="372" cy="182" r="40" fill="#2A2C45" stroke="#14163F" stroke-width="8"/>
+  <path d="M222 268 L272 256" stroke="#14163F" stroke-width="9" stroke-linecap="round"/>
+  <path d="M298 272 L346 270" stroke="#14163F" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="252" cy="300" r="9" fill="#14163F"/>
+  <circle cx="318" cy="300" r="9" fill="#14163F"/>
+  <path d="M258 358 Q282 372 306 356" fill="none" stroke="#14163F" stroke-width="10" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,14 @@
+{
+  "name": "mememanufaktur",
+  "version": "1.0.0",
+  "description": "Make-it-Meme als self-hostable Partyspiel – Studio, Meme-Pakete, Hot-Seat & LAN (zero deps).",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

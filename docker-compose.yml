@@ -1,0 +1,12 @@
+services:
+  mememanufaktur:
+    build: .
+    container_name: mememanufaktur
+    ports:
+      - "8080:8080"
+    volumes:
+      - meme-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  meme-data:

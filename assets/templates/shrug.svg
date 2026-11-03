@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="640" viewBox="0 0 640 640">
+  <rect width="640" height="640" fill="#FDFBF3"/>
+  <text x="320" y="150" text-anchor="middle" font-family="'Arial Black',system-ui,sans-serif" font-size="150" font-weight="900" fill="#14163F">?</text>
+  <path d="M240 405 L132 288" stroke="#2E5BFF" stroke-width="46" stroke-linecap="round"/>
+  <path d="M400 405 L508 288" stroke="#2E5BFF" stroke-width="46" stroke-linecap="round"/>
+  <circle cx="118" cy="272" r="28" fill="#F2C9A0" stroke="#14163F" stroke-width="8"/>
+  <circle cx="522" cy="272" r="28" fill="#F2C9A0" stroke="#14163F" stroke-width="8"/>
+  <path d="M210 585 L210 445 Q210 372 300 372 L340 372 Q430 372 430 445 L430 585 Z" fill="#2E5BFF" stroke="#14163F" stroke-width="10" stroke-linejoin="round"/>
+  <circle cx="320" cy="262" r="82" fill="#F2C9A0" stroke="#14163F" stroke-width="10"/>
+  <path d="M242 232 Q252 172 320 172 Q388 172 398 232 Q362 198 320 198 Q278 198 242 232 Z" fill="#2A2C45" stroke="#14163F" stroke-width="8" stroke-linejoin="round"/>
+  <circle cx="296" cy="256" r="9" fill="#14163F"/>
+  <circle cx="344" cy="256" r="9" fill="#14163F"/>
+  <ellipse cx="320" cy="308" rx="10" ry="13" fill="#14163F"/>
+</svg>
