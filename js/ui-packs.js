@@ -166,13 +166,13 @@ export function openPacks() {
     listWrap.innerHTML = '';
     for (const p of packs) {
       const tpls = await Packs.templatesInPack(p.id);
-      const thumbs = tpls.slice(0, 8).map((tpl) => {
+      const thumbs = tpls.map((tpl) => {
         const img = el('img', { alt: tpl.name });
         img.src = URL.createObjectURL(tpl.blob);
         return el('div', { class: 'pack-thumb', title: tpl.name },
           img,
-          tpl.builtin ? null : el('button', { title: 'Entfernen', onclick: () => removeTemplate(tpl.id, p) }, '✕'),
-          el('button', { style: { position: 'absolute', bottom: '4px', right: '4px', left: 'auto', width: '26px', height: '26px' }, title: t('pakete.use'), onclick: () => useTemplate(tpl) }, '↗'),
+          tpl.builtin ? null : el('button', { title: t('pakete.delTpl'), onclick: () => removeTemplate(tpl.id, p) }, '🗑'),
+          el('button', { style: { position: 'absolute', bottom: '4px', right: '4px', left: 'auto', width: '26px', height: '26px' }, title: t('pakete.edit'), onclick: () => useTemplate(tpl) }, '✏️'),
         );
       });
       listWrap.append(
