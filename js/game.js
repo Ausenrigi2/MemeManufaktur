@@ -631,7 +631,7 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
     }
 
     function tally() {
-      // makeitmeme-Punkte: ±1000 relativ zur Spielerzahl (up − down), dazu +10 pro ⛰️ PEAK aufs Meme
+      // Punkte: ±1000 relativ zur Spielerzahl (up − down), dazu +10 pro ⛰️ PEAK aufs Meme
       const denom = Math.max(1, playerList.length - 1);
       const nameOf = (id) => playerList.find((p) => p.id === id)?.name || '?';
       const peakCount = {};

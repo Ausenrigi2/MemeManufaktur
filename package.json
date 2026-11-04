@@ -1,7 +1,7 @@
 {
   "name": "mememanufaktur",
   "version": "1.0.0",
-  "description": "Make-it-Meme als self-hostable Partyspiel – Studio, Meme-Pakete, Hot-Seat & LAN (zero deps).",
+  "description": "Self-hostable Meme-Partyspiel – Studio, Meme-Pakete, Lobbys & LAN (zero deps).",
   "type": "module",
   "private": true,
   "scripts": {
