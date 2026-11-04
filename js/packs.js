@@ -111,7 +111,7 @@ export const Packs = {
   /** Built-in Templates (SVG + freie Meme-Bilder aus assets) einrichten – einmalig */
   async ensureBuiltins() {
     // v2: der neue Pack wird auch bei bestehenden Installationen nachgetragen
-    if (LS.get('builtinsInstalled', null) === 2) return;
+    if (LS.get('builtinsInstalled', null) === 3) return;
     const groups = [
       { packId: 'pk_builtin_klassiker', name: 'Klassiker', files: [
         ['stonks', 'Stonks'],
@@ -126,52 +126,39 @@ export const Packs = {
         ['leinwand-pink', 'Leinwand Pink'],
       ]},
       { packId: 'pk_builtin_free', name: 'Internet-Klassiker', files: [
-        ['doge', 'Doge', 'jpg'],
         ['advice-pie', 'Advice Animal', 'svg'],
         ['awesome-face', 'Okay / Nicht Okay', 'svg'],
         ['yuno-lego', 'Y U NO (LEGO)', 'jpg'],
         ['this-is-fine', 'This Is Fine', 'png'],
         ['illuminati', 'Illuminati', 'png'],
         ['einstein', 'Einstein-Tafel', 'jpg'],
-        ['high-impact', 'High Impact Violence', 'png'],
         ['3d-printed-ban-hammer', 'Ban Hammer', 'jpg'],
         ['elias-garcia-martinez-ecce-homo', 'Ecce Homo', 'jpg'],
-        ['macaca-nigra-self-portrait-large', 'Self-Portrait Ape', 'jpg'],
-        ['joshua-reynolds-david-garrick-between-tr', 'Tragedy and Comedy', 'jpg'],
-        ['a-message-from-captain-obvious', 'Captain Obvious', 'jpg'],
-        ['captain-obvious-strikes-again-flickr-k-e', 'Captain Obvious II', 'jpg'],
-        ['thank-you-captain-obvious-3464853227', 'Thank You, Captain Obvious', 'jpg'],
-        ['captain-bvious', 'Captain Öbvious', 'jpg'],
-        ['deepfried-meme-w', 'Deep Fried Meme W', 'jpg'],
+        ['macaca-nigra-self-portrait-large', 'Selbstporträt-Affe', 'jpg'],
+        ['joshua-reynolds-david-garrick-between-tr', 'Tragik & Komik', 'jpg'],
         ['deep-fried-blue-gatorade', 'Deep Fried Gatorade', 'jpg'],
         ['deep-fried-meme', 'Deep Fried Meme', 'jpg'],
         ['deepfriedpepsican', 'Deep Fried Pepsi Can', 'jpg'],
-        ['icon-on-my-wikipedia-userbox', 'Shiny Coin (WMF Userbox)', 'png'],
-        ['chaotic-evil', 'Chaotic Evil', 'gif'],
-        ['lawful-good', 'Lawful Good', 'gif'],
-        ['lawful-neutral', 'Lawful Neutral', 'gif'],
-        ['lawful-evil', 'Lawful Evil', 'gif'],
-        ['chaotic-good', 'Chaotic Good', 'gif'],
-        ['chaotic-neutral', 'Chaotic Neutral', 'gif'],
-        ['alignment-chart', 'Alignment Chart', 'png'],
-        ['3-3-alignment', 'Alignment Chart 3x3', 'png'],
-        ['dnd-alignment-chart', 'DND Alignment Chart', 'svg'],
+        ['icon-on-my-wikipedia-userbox', 'Shiny Coin', 'png'],
         ['party-parrot', 'Party Parrot', 'svg'],
         ['original-party-parrot', 'Party Parrot GIF', 'gif'],
-        ['the-femboy-hooters-jingle-ranch-sauce', 'Femboy Hooters Jingle', 'gif'],
-        ['dydchart', 'DYD Chart', 'png'],
-        ['commons-tan-iceberg-chart-blank-template', 'Iceberg Chart', 'png'],
-        ['texts-from-hillary', 'Texts from Hillary', 'png'],
-        ['ready-for-hillary-15696891292', 'Ready for Hillary', 'jpg'],
-        ['hillary-bus-15671686926', 'Hillary Bus', 'jpg'],
-        ['madame-secretary-text-drive', 'Text & Drive', 'jpg'],
         ['screamer2', 'Screamer 2', 'gif'],
         ['screamer3', 'Screamer 3', 'gif'],
         ['chelovechek', 'Chelovechek', 'jpg'],
-      ]},
+      ],
+      // Review 2026-11: Bilder mit eingebautem Text oder Charts ohne Textraum sind keine Caption-Templates
+      removed: ['doge', 'high-impact', 'a-message-from-captain-obvious', 'captain-obvious-strikes-again-flickr-k-e', 'thank-you-captain-obvious-3464853227', 'captain-bvious', 'deepfried-meme-w', 'chaotic-evil', 'lawful-good', 'lawful-neutral', 'lawful-evil', 'chaotic-good', 'chaotic-neutral', 'alignment-chart', '3-3-alignment', 'dnd-alignment-chart', 'the-femboy-hooters-jingle-ranch-sauce', 'dydchart', 'commons-tan-iceberg-chart-blank-template', 'texts-from-hillary', 'ready-for-hillary-15696891292', 'hillary-bus-15671686926', 'madame-secretary-text-drive']},
     ];
     const existing = new Set((await this.allTemplates()).map((t) => t.id));
     for (const g of groups) {
+      for (const key of g.removed || []) {
+        const id = `builtin_${key}`;
+        if (!existing.has(id)) continue;
+        await this.deleteTemplate(id);
+        for (const p of await this.allPacks()) {
+          if (p.tplIds.includes(id)) { p.tplIds = p.tplIds.filter((x) => x !== id); await this.updatePack(p); }
+        }
+      }
       for (const [key, name, ext = 'svg'] of g.files) {
         const id = `builtin_${key}`; // feste IDs, damit Studio-Links stabil bleiben
         if (existing.has(id)) continue;
@@ -198,7 +185,7 @@ export const Packs = {
         if (dirty) await this.updatePack(pack);
       }
     }
-    LS.set('builtinsInstalled', 2);
+    LS.set('builtinsInstalled', 3);
   },
   async createPackRaw(id, name, builtin, tplIds) {
     await tx('packs', 'readwrite', (s) => s.put({ id, name, builtin, tplIds, order: 1, createdAt: Date.now() }));

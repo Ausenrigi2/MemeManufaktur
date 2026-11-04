@@ -175,3 +175,16 @@ test('Delete: fremde private Entries nur vom Eigentümer', async () => {
   assert.equal((await del('mm_sid=' + 'f'.repeat(48))).status, 403); //Session unbekannt -> anonymous
   assert.equal((await del(b.cookie)).status, 200);
 });
+
+// ============ Textzonen (pure Logik, ohne DOM) ============
+import { zoneFor, layerPatch } from '../js/textzones.js';
+
+test('text zones: lookup and layer patch', () => {
+  assert.ok(zoneFor('builtin_drake').top.yF > 0);
+  assert.equal(zoneFor('tpl_upload_xyz'), null); // Uploads bleiben auf Standardposition
+  const mc = { cw: 640, ch: 820 };
+  const p = layerPatch(mc, zoneFor('builtin_drake').top);
+  assert.equal(p.y, Math.round(820 * 0.3));
+  assert.equal(p.x, Math.round(640 * 0.62));
+  assert.equal(layerPatch(mc, null), null);
+});

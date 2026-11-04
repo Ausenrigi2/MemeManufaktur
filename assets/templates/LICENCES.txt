@@ -1,46 +1,30 @@
 Free meme templates from Wikimedia Commons (downloaded 2026-11-04 via the Commons API). Every file matches the license below.
 
-doge.jpg           CC0             Euterpia                                  https://commons.wikimedia.org/wiki/File:Doge_homemade_meme.jpg
-advice-pie.svg     CC BY-SA 3.0    Tc2k11                                    https://commons.wikimedia.org/wiki/File:Advice_pie.svg
-awesome-face.svg   CC BY-SA 3.0    East718 (vector: Holly Cheng, Giro720)    https://commons.wikimedia.org/wiki/File:Awesome_Face.svg
-yuno-lego.jpg      Public domain   Ochre Jelly                                https://commons.wikimedia.org/wiki/File:LEGO_%22Y_U_NO%22_meme_(Free_to_use).jpg
-this-is-fine.png   Public domain   AI recreation (original comic © KC Green)  https://commons.wikimedia.org/wiki/File:This_Is_Fine_(meme).png
-illuminati.png     Public domain   US Government                              https://commons.wikimedia.org/wiki/File:Illuminati_triangle_eye.png
-einstein.jpg       Public domain   Associated Press                           https://commons.wikimedia.org/wiki/File:Einstein_Blackboard_Exploitable_template.jpg
-high-impact.png    Public domain   Memethingy                                 https://commons.wikimedia.org/wiki/File:High_impact_sexual_violence_template.png
-
-Batch 2 (added 2026-11-04):
-3d-printed-ban-hammer.jpg                     CC BY-SA 3.0    Eagleapex
-elias-garcia-martinez-ecce-homo.jpg           Public domain   Elías García Martínez
-macaca-nigra-self-portrait-large.jpg           Public domain   Macaca nigra
-joshua-reynolds-david-garrick-between-tr.jpg   Public domain   Joshua Reynolds
-a-message-from-captain-obvious.jpg             CC BY 2.0       deepstereo
-captain-obvious-strikes-again-flickr-k-e.jpg   CC BY-SA 2.0    Keir Smith
-thank-you-captain-obvious-3464853227.jpg       CC BY-SA 2.0    mendhak
-captain-bvious.jpg                             CC BY-SA 2.0    Nicolas Sanguinetti
-deepfried-meme-w.jpg                           CC BY-SA 4.0    Zsinytwiki
-deep-fried-blue-gatorade.jpg                   CC BY-SA 4.0    LincolnFry
-deep-fried-meme.jpg                            CC BY-SA 4.0    Lord Belbury
-deepfriedpepsican.jpg                          CC BY-SA 4.0    SomeoneIguess
-icon-on-my-wikipedia-userbox.png               CC BY-SA 4.0    Zsinytwiki
-chaotic-evil.gif  lawful-good.gif  lawful-neutral.gif  lawful-evil.gif  chaotic-good.gif  chaotic-neutral.gif   Public domain   Alexia Death
-alignment-chart.png                            CC BY-SA 4.0    AbiClipart, Zachary McCune (WMF)
-3-3-alignment.png                              CC0             Alexia Death
-dnd-alignment-chart.svg                        CC0             Schützenpanzer
-party-parrot.svg                               CC BY-SA 4.0    John Hobbs
-original-party-parrot.gif                      CC0             Geiger Powell
-the-femboy-hooters-jingle-ranch-sauce.gif      CC BY 4.0       Nicky Case
-dydchart.png                                   CC BY 3.0       Nederbird
-commons-tan-iceberg-chart-blank-template.png   CC BY-SA 4.0    Dronebogus
-texts-from-hillary.png                         Public domain   Texts From Hillary
-ready-for-hillary-15696891292.jpg              CC BY 2.0       Marc Nozell
-hillary-bus-15671686926.jpg                    CC BY 2.0       Marc Nozell
-madame-secretary-text-drive.jpg                CC BY 2.0       Marc Nozell
-screamer2.gif                                  CC BY-SA 4.0    Bad day...nice Halloween
-screamer3.gif                                  CC BY-SA 4.0    Bad day...nice Halloween et al.
-chelovechek.jpg                                CC BY-SA 4.0    AeternaSomniator
+advice-pie.svg                             CC BY-SA 3.0    Tc2k11
+awesome-face.svg                           CC BY-SA 3.0    East718 (vector: Holly Cheng, Giro720)
+yuno-lego.jpg                              Public domain   Ochre Jelly
+this-is-fine.png                           Public domain   AI recreation (original comic © KC Green)
+illuminati.png                             Public domain   US Government
+einstein.jpg                               Public domain   Associated Press
+3d-printed-ban-hammer.jpg                  CC BY-SA 3.0    Eagleapex
+elias-garcia-martinez-ecce-homo.jpg        Public domain   Elías García Martínez
+macaca-nigra-self-portrait-large.jpg       Public domain   Macaca nigra
+joshua-reynolds-david-garrick-between-tr.jpg Public domain Joshua Reynolds
+deep-fried-blue-gatorade.jpg               CC BY-SA 4.0    LincolnFry
+deep-fried-meme.jpg                        CC BY-SA 4.0    Lord Belbury
+deepfriedpepsican.jpg                      CC BY-SA 4.0    SomeoneIguess
+icon-on-my-wikipedia-userbox.png           CC BY-SA 4.0    Zsinytwiki
+party-parrot.svg                           CC BY-SA 4.0    John Hobbs
+original-party-parrot.gif                  CC0             Geiger Powell
+screamer2.gif                              CC BY-SA 4.0    Bad day...nice Halloween
+screamer3.gif                              CC BY-SA 4.0    Bad day...nice Halloween et al.
+chelovechek.jpg                            CC BY-SA 4.0    AeternaSomniator
 
 All source files: https://commons.wikimedia.org/wiki/File:<filename>
+
+Removed in the 2026-11 review (text baked into the image or charts without caption space:
+doge, high-impact, Captain-Obvious series, Hillary series, W-meme, all alignment/DYD/iceberg charts,
+Femboy-Hooters jingle, alignment GIF panels) — not usable as caption templates in this game.
 
 CC-BY/CC-BY-SA attribution is only needed for public display (a private self-hosted game is fine).
 

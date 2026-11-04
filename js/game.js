@@ -1,6 +1,7 @@
 // ============ Meme-Partie: Lobby + Spiel-Phasen ============
 import { el, t, rand, shuffle, toast, confetti, roomCode, uid } from './lib.js';
 import { MemeCanvas, renderMemeToDataUrl } from './editor.js';
+import { zoneFor, layerPatch } from './textzones.js';
 import { Packs, ServerAPI } from './packs.js';
 import { Room } from './net.js';
 
@@ -68,15 +69,17 @@ async function pickTemplates(count, mode, idList = [], ownPools = null) {
   return out;
 }
 
-function livePreview(canvas, tplBlob) {
+function livePreview(canvas, tplBlob, id = '') {
   const mc = new MemeCanvas(canvas);
   let topL = null, botL = null, ready = false;
   (async () => {
     try {
       await mc.setImage(tplBlob);
       const base = Math.min(mc.cw, mc.ch);
-      topL = mc.addLayer({ text: '', y: Math.round(base * 0.13), fontSize: Math.round(base * 0.11), strokeWidth: Math.max(5, Math.round(base * 0.012)) });
-      botL = mc.addLayer({ text: '', y: mc.ch - Math.round(base * 0.13), fontSize: Math.round(base * 0.11), strokeWidth: Math.max(5, Math.round(base * 0.012)) });
+      const z = zoneFor(id);
+      const def = (y) => ({ y, fontSize: Math.round(base * 0.11), strokeWidth: Math.max(5, Math.round(base * 0.012)) });
+      topL = mc.addLayer({ text: '', ...(layerPatch(mc, z?.top) || def(Math.round(base * 0.13))) });
+      botL = mc.addLayer({ text: '', ...(layerPatch(mc, z?.bottom) || def(mc.ch - Math.round(base * 0.13))) });
       mc.selectedId = null;
       mc.render();
       ready = true;
@@ -401,7 +404,7 @@ function doTurn(msg) {
     const tpl = await resolveTpl(msg.tplKey);
     if (!tpl) throw new Error('Template fehlt');
     const canvas = el('canvas', { width: 640, height: 640 });
-    const preview = livePreview(canvas, tpl.blob);
+    const preview = livePreview(canvas, tpl.blob, tpl.id);
     const topIn = el('textarea', { rows: 2, placeholder: t('spiel.turn.top') });
     const botIn = el('textarea', { rows: 2, placeholder: t('spiel.turn.bottom') });
     const timerWrap = el('div', { class: 'timerbar' }, el('i'));
@@ -456,7 +459,7 @@ function doVote(msg) {
     (async () => {
       const tpl = await resolveTpl(m.tplKey);
       if (!tpl) return;
-      img.src = await renderMemeToDataUrl({ blob: tpl.blob, top: m.top, bottom: m.bottom });
+      img.src = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom });
     })();
     const upB = el('button', { class: 'vbtn vbtn-up', title: t('spiel.vote.up') }, '👍');
     const dnB = el('button', { class: 'vbtn vbtn-down', title: t('spiel.vote.down') }, '👎');
@@ -497,7 +500,7 @@ function doResult(msg) {
     const img = el('img', { alt: s.name });
     (async () => {
       const tpl = await resolveTpl(s.tplKey);
-      if (tpl) img.src = await renderMemeToDataUrl({ blob: tpl.blob, top: s.top, bottom: s.bottom });
+      if (tpl) img.src = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: s.top, bottom: s.bottom });
     })();
     rows.append(el('div', { class: `result-row${s.pts === Math.max(...msg.scores.map((x) => x.pts)) && s.pts > 0 ? ' winner' : ''}` },
       img,
@@ -524,7 +527,7 @@ function doFinal(msg) {
         const img = el('img', { alt: m.name });
         (async () => {
           const tpl = await resolveTpl(m.tplKey);
-          if (tpl) img.src = await renderMemeToDataUrl({ blob: tpl.blob, top: m.top, bottom: m.bottom });
+          if (tpl) img.src = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom });
         })();
         return el('div', { class: 'vote-card' }, img, el('div', { class: 'vote-meta' }, m.name, ' · ' + m.pts + ' P.'));
       }),
@@ -577,7 +580,7 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
     const tpls = {};
     for (const k of new Set(tplKeys)) {
       const tpl = await resolveTpl(k);
-      if (tpl) tpls[k] = await renderMemeToDataUrl({ blob: tpl.blob, top: '', bottom: '' }, 900);
+      if (tpl) tpls[k] = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: '', bottom: '' }, 900);
     }
 
     // Turn-Phase: alle erstellen parallel, gemeinsames Zeitfenster
