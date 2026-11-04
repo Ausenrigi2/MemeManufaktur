@@ -108,52 +108,63 @@ export const Packs = {
     return pack.tplIds.map((id) => all.find((t) => t.id === id)).filter(Boolean);
   },
 
-  /** Built-in Templates (SVG aus assets) einrichten – einmalig */
+  /** Built-in Templates (SVG + freie Meme-Bilder aus assets) einrichten – einmalig */
   async ensureBuiltins() {
-    const done = LS.get('builtinsInstalled', null);
-    if (done) return;
-    const files = [
-      ['stonks', 'Stonks'],
-      ['drake', 'Dracke (Ja/Nein)'],
-      ['ragecat', 'Rage Cat'],
-      ['crying', 'Weinerl'],
-      ['shrug', 'Schrugg'],
-      ['confused', 'Verwirrte Lady'],
-      ['distracted', 'Ablenkung'],
-      ['pigeon', 'Ist das eine Taube?'],
-      ['leinwand-gelb', 'Leinwand Gelb'],
-      ['leinwand-pink', 'Leinwand Pink'],
+    // v2: der neue Pack wird auch bei bestehenden Installationen nachgetragen
+    if (LS.get('builtinsInstalled', null) === 2) return;
+    const groups = [
+      { packId: 'pk_builtin_klassiker', name: 'Klassiker', files: [
+        ['stonks', 'Stonks'],
+        ['drake', 'Dracke (Ja/Nein)'],
+        ['ragecat', 'Rage Cat'],
+        ['crying', 'Weinerl'],
+        ['shrug', 'Schrugg'],
+        ['confused', 'Verwirrte Lady'],
+        ['distracted', 'Ablenkung'],
+        ['pigeon', 'Ist das eine Taube?'],
+        ['leinwand-gelb', 'Leinwand Gelb'],
+        ['leinwand-pink', 'Leinwand Pink'],
+      ]},
+      { packId: 'pk_builtin_free', name: 'Internet-Klassiker', files: [
+        ['doge', 'Doge', 'jpg'],
+        ['advice-pie', 'Advice Animal', 'svg'],
+        ['awesome-face', 'Okay / Nicht Okay', 'svg'],
+        ['yuno-lego', 'Y U NO (LEGO)', 'jpg'],
+        ['this-is-fine', 'This Is Fine', 'png'],
+        ['illuminati', 'Illuminati', 'png'],
+        ['einstein', 'Einstein-Tafel', 'jpg'],
+        ['high-impact', 'High Impact Violence', 'png'],
+      ]},
     ];
-    // Feste IDs, damit Studio-Links stabil bleiben
-    const ids = {};
-    for (const [key] of files) ids[key] = `builtin_${key}`;
     const existing = new Set((await this.allTemplates()).map((t) => t.id));
-    let changed = false;
-    for (const [key, name] of files) {
-      if (existing.has(ids[key])) continue;
-      const url = `assets/templates/${key}.svg`;
-      const res = await fetch(url);
-      if (!res.ok) continue;
-      const blob = await res.blob();
-      await this.addTemplate({
-        id: ids[key], name, blob, mime: 'image/svg+xml',
-        builtin: true, packId: 'pk_builtin_klassiker', shared: null,
-        createdAt: Date.now(),
-      });
-      changed = true;
-    }
-    const packs = await this.allPacks();
-    if (!packs.some((p) => p.id === 'pk_builtin_klassiker')) {
-      await this.createPackRaw('pk_builtin_klassiker', 'Klassiker', true, files.map(([k]) => ids[k]));
-    } else if (changed) {
-      const pack = packs.find((p) => p.id === 'pk_builtin_klassiker');
-      for (const [key] of files) {
-        const id = ids[key];
-        if (!pack.tplIds.includes(id)) pack.tplIds.push(id);
+    for (const g of groups) {
+      let changed = false;
+      for (const [key, name, ext = 'svg'] of g.files) {
+        const id = `builtin_${key}`; // feste IDs, damit Studio-Links stabil bleiben
+        if (existing.has(id)) continue;
+        const res = await fetch(`assets/templates/${key}.${ext}`);
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        await this.addTemplate({
+          id, name, blob, mime: ext === 'svg' ? 'image/svg+xml' : `image/${ext}`,
+          builtin: true, packId: g.packId, shared: null,
+          createdAt: Date.now(),
+        });
+        changed = true;
       }
-      await this.updatePack(pack);
+      const packs = await this.allPacks();
+      const pack = packs.find((p) => p.id === g.packId);
+      if (!pack) {
+        await this.createPackRaw(g.packId, g.name, true, g.files.map(([k]) => `builtin_${k}`));
+      } else if (changed) {
+        for (const [key] of g.files) {
+          const id = `builtin_${key}`;
+          if (!pack.tplIds.includes(id)) pack.tplIds.push(id);
+        }
+        await this.updatePack(pack);
+      }
     }
-    LS.set('builtinsInstalled', true);
+    LS.set('builtinsInstalled', 2);
   },
   async createPackRaw(id, name, builtin, tplIds) {
     await tx('packs', 'readwrite', (s) => s.put({ id, name, builtin, tplIds, order: 1, createdAt: Date.now() }));

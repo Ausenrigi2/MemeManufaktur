@@ -1,0 +1,12 @@
+Free meme templates from Wikimedia Commons (downloaded 2026-11-04). All files are free-licensed as listed.
+
+doge.jpg           CC0             Euterpia                                  https://commons.wikimedia.org/wiki/File:Doge_homemade_meme.jpg
+advice-pie.svg     CC BY-SA 3.0    Tc2k11                                    https://commons.wikimedia.org/wiki/File:Advice_pie.svg
+awesome-face.svg   CC BY-SA 3.0    East718 (vector: Holly Cheng, Giro720)    https://commons.wikimedia.org/wiki/File:Awesome_Face.svg
+yuno-lego.jpg      Public domain   Ochre Jelly                                https://commons.wikimedia.org/wiki/File:LEGO_%22Y_U_NO%22_meme_(Free_to_use).jpg
+this-is-fine.png   Public domain   AI recreation (original comic © KC Green)  https://commons.wikimedia.org/wiki/File:This_Is_Fine_(meme).png
+illuminati.png     Public domain   US Government                              https://commons.wikimedia.org/wiki/File:Illuminati_triangle_eye.png
+einstein.jpg       Public domain   Associated Press                           https://commons.wikimedia.org/wiki/File:Einstein_Blackboard_Exploitable_template.jpg
+high-impact.png    Public domain   Memethingy                                 https://commons.wikimedia.org/wiki/File:High_impact_sexual_violence_template.png
+
+The two CC-BY-SA files only need attribution in a public display (a private self-hosted game is fine).
