@@ -1,5 +1,5 @@
 // ============ Pakete: IndexedDB + Server-Sync ============
-import { LS, uid, toast } from './lib.js';
+import { uid, toast } from './lib.js';
 
 const DB_NAME = 'mememanufaktur';
 const DB_VERSION = 1;
@@ -108,10 +108,8 @@ export const Packs = {
     return pack.tplIds.map((id) => all.find((t) => t.id === id)).filter(Boolean);
   },
 
-  /** Built-in Templates (SVG + freie Meme-Bilder aus assets) einrichten – einmalig */
+  /** Built-in Templates – idempotent: ergänzt fehlende Bilder (auch nach fehlgeschlagenen Fetches), räumt Eingestelltes auf */
   async ensureBuiltins() {
-    // v4: Internet-Klassiker nachinstallieren + eingestellter "Klassiker"-Pack aufräumen
-    if (LS.get('builtinsInstalled', null) === 4) return;
     const groups = [
       { packId: 'pk_builtin_free', name: 'Internet-Klassiker', files: [
         ['advice-pie', 'Advice Animal', 'svg'],
@@ -157,33 +155,25 @@ export const Packs = {
           if (p.tplIds.includes(id)) { p.tplIds = p.tplIds.filter((x) => x !== id); await this.updatePack(p); }
         }
       }
+      const packs = await this.allPacks();
+      let pack = packs.find((p) => p.id === g.packId);
+      if (!pack) {
+        await this.createPackRaw(g.packId, g.name, true, g.files.map(([k]) => `builtin_${k}`));
+        pack = (await this.allPacks()).find((p) => p.id === g.packId);
+      }
       for (const [key, name, ext = 'svg'] of g.files) {
         const id = `builtin_${key}`; // feste IDs, damit Studio-Links stabil bleiben
+        if (!pack.tplIds.includes(id)) continue; // bewusst vom Nutzer entfernt
         if (existing.has(id)) continue;
         const res = await fetch(`assets/templates/${key}.${ext}`);
-        if (!res.ok) continue;
-        const blob = await res.blob();
+        if (!res.ok) continue; // beim nächsten Laden erneut versucht
         await this.addTemplate({
-          id, name, blob, mime: res.type || `image/${ext}`,
+          id, name, blob: await res.blob(), mime: res.type || `image/${ext}`,
           builtin: true, packId: g.packId, shared: null,
           createdAt: Date.now(),
         });
       }
-      const packs = await this.allPacks();
-      const pack = packs.find((p) => p.id === g.packId);
-      if (!pack) {
-        await this.createPackRaw(g.packId, g.name, true, g.files.map(([k]) => `builtin_${k}`));
-      } else {
-        // tplIds immer synchronisieren (idempotent) – auch wenn Templates schon vorher existierten
-        let dirty = false;
-        for (const [key] of g.files) {
-          const id = `builtin_${key}`;
-          if (!pack.tplIds.includes(id)) { pack.tplIds.push(id); dirty = true; }
-        }
-        if (dirty) await this.updatePack(pack);
-      }
     }
-    LS.set('builtinsInstalled', 4);
   },
   async createPackRaw(id, name, builtin, tplIds) {
     await tx('packs', 'readwrite', (s) => s.put({ id, name, builtin, tplIds, order: 1, createdAt: Date.now() }));

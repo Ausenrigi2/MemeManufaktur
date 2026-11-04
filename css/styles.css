@@ -153,7 +153,7 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--blue); }
 .pack-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 22px; padding: 26px 0; }
 .pack-card { display: flex; flex-direction: column; gap: 12px; }
 .pack-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.pack-thumbs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.pack-thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
 .pack-thumb { position: relative; border: var(--border); border-radius: 10px; overflow: hidden; background: var(--input); aspect-ratio: 1; cursor: pointer; }
 .pack-thumb:focus-visible { outline: 3px solid var(--ink); }
 .pack-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }

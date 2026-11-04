@@ -176,7 +176,7 @@ export function openPacks() {
           onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } },
         },
           img,
-          tpl.builtin ? null : el('button', { type: 'button', title: t('pakete.delTpl'), onclick: (e) => { e.stopPropagation(); removeTemplate(tpl.id, p); } }, '🗑'),
+          el('button', { type: 'button', title: t('pakete.delTpl'), onclick: (e) => { e.stopPropagation(); removeTemplate(tpl.id, p); } }, '🗑'),
           el('button', { class: 'edit', type: 'button', title: t('pakete.edit'), onclick: (e) => { e.stopPropagation(); open(); } }, '✏️'),
         );
       });
