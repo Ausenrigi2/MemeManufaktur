@@ -180,11 +180,11 @@ test('Delete: fremde private Entries nur vom Eigentümer', async () => {
 import { zoneFor, layerPatch } from '../js/textzones.js';
 
 test('text zones: lookup and layer patch', () => {
-  assert.ok(zoneFor('builtin_drake').top.yF > 0);
+  assert.ok(zoneFor('builtin_awesome-face').top.yF > 0);
   assert.equal(zoneFor('tpl_upload_xyz'), null); // Uploads bleiben auf Standardposition
   const mc = { cw: 640, ch: 820 };
-  const p = layerPatch(mc, zoneFor('builtin_drake').top);
-  assert.equal(p.y, Math.round(820 * 0.3));
-  assert.equal(p.x, Math.round(640 * 0.62));
+  const p = layerPatch(mc, zoneFor('builtin_awesome-face').top);
+  assert.equal(p.y, Math.round(820 * 0.25));
+  assert.equal(p.x, Math.round(640 * 0.78));
   assert.equal(layerPatch(mc, null), null);
 });

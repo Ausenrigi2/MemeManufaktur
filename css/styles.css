@@ -154,13 +154,15 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--blue); }
 .pack-card { display: flex; flex-direction: column; gap: 12px; }
 .pack-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .pack-thumbs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-.pack-thumb { position: relative; border: var(--border); border-radius: 10px; overflow: hidden; background: var(--input); aspect-ratio: 1; }
+.pack-thumb { position: relative; border: var(--border); border-radius: 10px; overflow: hidden; background: var(--input); aspect-ratio: 1; cursor: pointer; }
+.pack-thumb:focus-visible { outline: 3px solid var(--ink); }
 .pack-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .pack-thumb button {
   position: absolute; top: 4px; right: 4px; z-index: 2;
-  width: 24px; height: 24px; border: 2px solid var(--ink); border-radius: 8px;
-  background: var(--red); color: #fff; font-weight: 900; cursor: pointer; line-height: 1;
+  width: 28px; height: 28px; border: 2px solid var(--ink); border-radius: 8px;
+  background: var(--red); color: #fff; font-weight: 900; font-size: 14px; cursor: pointer; line-height: 1;
 }
+.pack-thumb button.edit { top: auto; bottom: 4px; background: var(--ink); }
 .pack-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .dropzone {
   border: 2px dashed var(--line); border-radius: var(--radius); padding: 26px; text-align: center;

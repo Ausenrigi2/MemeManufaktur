@@ -1,10 +1,7 @@
 // Textzonen pro Built-in-Template (Anteile: yF = Anteil der Bildhöhe, fsF = Anteil der kürzeren Seite).
 // Templates ohne Eintrag nutzen die Standard-Position oben/unten – bei Reaktionsbildern ist das der passende Textraum.
 export const TEXT_ZONES = {
-  drake: { top: { xF: 0.62, yF: 0.30, fsF: 0.07 }, bottom: { xF: 0.62, yF: 0.90, fsF: 0.07 } },
   'awesome-face': { top: { xF: 0.78, yF: 0.25, fsF: 0.08 }, bottom: { xF: 0.78, yF: 0.55, fsF: 0.08 } },
-  'leinwand-gelb': { top: { yF: 0.30, fsF: 0.08 }, bottom: { yF: 0.62, fsF: 0.08 } },
-  'leinwand-pink': { top: { yF: 0.30, fsF: 0.08 }, bottom: { yF: 0.62, fsF: 0.08 } },
 };
 
 export function zoneFor(id) {

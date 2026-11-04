@@ -22,7 +22,8 @@ chelovechek.jpg                            CC BY-SA 4.0    AeternaSomniator
 
 All source files: https://commons.wikimedia.org/wiki/File:<filename>
 
-Removed in the 2026-11 review (text baked into the image or charts without caption space:
+Removed in the 2026-11 review: the own-drawn "Klassiker" SVG pack was retired, and these files
+(text baked into the image or charts without caption space:
 doge, high-impact, Captain-Obvious series, Hillary series, W-meme, all alignment/DYD/iceberg charts,
 Femboy-Hooters jingle, alignment GIF panels) — not usable as caption templates in this game.
 

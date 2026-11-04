@@ -169,10 +169,15 @@ export function openPacks() {
       const thumbs = tpls.map((tpl) => {
         const img = el('img', { alt: tpl.name });
         img.src = URL.createObjectURL(tpl.blob);
-        return el('div', { class: 'pack-thumb', title: tpl.name },
+        const open = () => useTemplate(tpl);
+        return el('div', {
+          class: 'pack-thumb', title: t('pakete.edit'), role: 'button', tabindex: 0,
+          onclick: open,
+          onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } },
+        },
           img,
-          tpl.builtin ? null : el('button', { title: t('pakete.delTpl'), onclick: () => removeTemplate(tpl.id, p) }, '🗑'),
-          el('button', { style: { position: 'absolute', bottom: '4px', right: '4px', left: 'auto', width: '26px', height: '26px' }, title: t('pakete.edit'), onclick: () => useTemplate(tpl) }, '✏️'),
+          tpl.builtin ? null : el('button', { type: 'button', title: t('pakete.delTpl'), onclick: (e) => { e.stopPropagation(); removeTemplate(tpl.id, p); } }, '🗑'),
+          el('button', { class: 'edit', type: 'button', title: t('pakete.edit'), onclick: (e) => { e.stopPropagation(); open(); } }, '✏️'),
         );
       });
       listWrap.append(

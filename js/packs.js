@@ -110,21 +110,9 @@ export const Packs = {
 
   /** Built-in Templates (SVG + freie Meme-Bilder aus assets) einrichten – einmalig */
   async ensureBuiltins() {
-    // v2: der neue Pack wird auch bei bestehenden Installationen nachgetragen
-    if (LS.get('builtinsInstalled', null) === 3) return;
+    // v4: Internet-Klassiker nachinstallieren + eingestellter "Klassiker"-Pack aufräumen
+    if (LS.get('builtinsInstalled', null) === 4) return;
     const groups = [
-      { packId: 'pk_builtin_klassiker', name: 'Klassiker', files: [
-        ['stonks', 'Stonks'],
-        ['drake', 'Dracke (Ja/Nein)'],
-        ['ragecat', 'Rage Cat'],
-        ['crying', 'Weinerl'],
-        ['shrug', 'Schrugg'],
-        ['confused', 'Verwirrte Lady'],
-        ['distracted', 'Ablenkung'],
-        ['pigeon', 'Ist das eine Taube?'],
-        ['leinwand-gelb', 'Leinwand Gelb'],
-        ['leinwand-pink', 'Leinwand Pink'],
-      ]},
       { packId: 'pk_builtin_free', name: 'Internet-Klassiker', files: [
         ['advice-pie', 'Advice Animal', 'svg'],
         ['awesome-face', 'Okay / Nicht Okay', 'svg'],
@@ -149,7 +137,17 @@ export const Packs = {
       // Review 2026-11: Bilder mit eingebautem Text oder Charts ohne Textraum sind keine Caption-Templates
       removed: ['doge', 'high-impact', 'a-message-from-captain-obvious', 'captain-obvious-strikes-again-flickr-k-e', 'thank-you-captain-obvious-3464853227', 'captain-bvious', 'deepfried-meme-w', 'chaotic-evil', 'lawful-good', 'lawful-neutral', 'lawful-evil', 'chaotic-good', 'chaotic-neutral', 'alignment-chart', '3-3-alignment', 'dnd-alignment-chart', 'the-femboy-hooters-jingle-ranch-sauce', 'dydchart', 'commons-tan-iceberg-chart-blank-template', 'texts-from-hillary', 'ready-for-hillary-15696891292', 'hillary-bus-15671686926', 'madame-secretary-text-drive']},
     ];
+    // Eingestellter eigener "Klassiker"-Pack: auch in bestehenden Installationen aufräumen
+    const droppedPacks = [{ packId: 'pk_builtin_klassiker', keys: ['stonks', 'drake', 'ragecat', 'crying', 'shrug', 'confused', 'distracted', 'pigeon', 'leinwand-gelb', 'leinwand-pink'] }];
     const existing = new Set((await this.allTemplates()).map((t) => t.id));
+    for (const d of droppedPacks) {
+      for (const key of d.keys) {
+        const id = `builtin_${key}`;
+        if (existing.has(id)) await this.deleteTemplate(id);
+      }
+      const p = (await this.allPacks()).find((x) => x.id === d.packId);
+      if (p) await this.deletePack(d.packId);
+    }
     for (const g of groups) {
       for (const key of g.removed || []) {
         const id = `builtin_${key}`;
@@ -185,7 +183,7 @@ export const Packs = {
         if (dirty) await this.updatePack(pack);
       }
     }
-    LS.set('builtinsInstalled', 3);
+    LS.set('builtinsInstalled', 4);
   },
   async createPackRaw(id, name, builtin, tplIds) {
     await tx('packs', 'readwrite', (s) => s.put({ id, name, builtin, tplIds, order: 1, createdAt: Date.now() }));
