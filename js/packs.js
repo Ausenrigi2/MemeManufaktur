@@ -94,6 +94,7 @@ export const Packs = {
     for (const p of packs) {
       if (p.tplIds.includes(id)) {
         p.tplIds = p.tplIds.filter((x) => x !== id);
+        p.deleted = [...(p.deleted || []), id]; // damit neuer Pack-Inhalt nicht auf gelocale Einträge zurückkommt
         await this.updatePack(p);
       }
     }
@@ -131,6 +132,8 @@ export const Packs = {
         ['screamer2', 'Screamer 2', 'gif'],
         ['screamer3', 'Screamer 3', 'gif'],
         ['chelovechek', 'Chelovechek', 'jpg'],
+        ['apollo-with-dodgeball', 'Apollo mit Dodgeball', 'png'],
+        ['smiling-cat', 'Smiling Cat', 'jpg'],
       ],
       // Review 2026-11: Bilder mit eingebautem Text oder Charts ohne Textraum sind keine Caption-Templates
       removed: ['doge', 'high-impact', 'a-message-from-captain-obvious', 'captain-obvious-strikes-again-flickr-k-e', 'thank-you-captain-obvious-3464853227', 'captain-bvious', 'deepfried-meme-w', 'chaotic-evil', 'lawful-good', 'lawful-neutral', 'lawful-evil', 'chaotic-good', 'chaotic-neutral', 'alignment-chart', '3-3-alignment', 'dnd-alignment-chart', 'the-femboy-hooters-jingle-ranch-sauce', 'dydchart', 'commons-tan-iceberg-chart-blank-template', 'texts-from-hillary', 'ready-for-hillary-15696891292', 'hillary-bus-15671686926', 'madame-secretary-text-drive']},
@@ -161,9 +164,11 @@ export const Packs = {
         await this.createPackRaw(g.packId, g.name, true, g.files.map(([k]) => `builtin_${k}`));
         pack = (await this.allPacks()).find((p) => p.id === g.packId);
       }
+      let dirty = false;
       for (const [key, name, ext = 'svg'] of g.files) {
         const id = `builtin_${key}`; // feste IDs, damit Studio-Links stabil bleiben
-        if (!pack.tplIds.includes(id)) continue; // bewusst vom Nutzer entfernt
+        if (pack.deleted?.includes(id)) continue; // bewusst vom Nutzer entfernt
+        if (!pack.tplIds.includes(id)) { pack.tplIds.push(id); dirty = true; }
         if (existing.has(id)) continue;
         const res = await fetch(`assets/templates/${key}.${ext}`);
         if (!res.ok) continue; // beim nächsten Laden erneut versucht
@@ -173,6 +178,7 @@ export const Packs = {
           createdAt: Date.now(),
         });
       }
+      if (dirty) await this.updatePack(pack);
     }
   },
   async createPackRaw(id, name, builtin, tplIds) {

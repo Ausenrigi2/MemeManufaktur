@@ -19,6 +19,8 @@ original-party-parrot.gif                  CC0             Geiger Powell
 screamer2.gif                              CC BY-SA 4.0    Bad day...nice Halloween
 screamer3.gif                              CC BY-SA 4.0    Bad day...nice Halloween et al.
 chelovechek.jpg                            CC BY-SA 4.0    AeternaSomniator
+apollo-with-dodgeball.png                  CC BY-SA 4.0    ArtemisiaGentileschiFan
+smiling-cat.jpg                            CC BY 2.0       Glen Bowman
 
 All source files: https://commons.wikimedia.org/wiki/File:<filename>
 
