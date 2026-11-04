@@ -134,11 +134,44 @@ export const Packs = {
         ['illuminati', 'Illuminati', 'png'],
         ['einstein', 'Einstein-Tafel', 'jpg'],
         ['high-impact', 'High Impact Violence', 'png'],
+        ['3d-printed-ban-hammer', 'Ban Hammer', 'jpg'],
+        ['elias-garcia-martinez-ecce-homo', 'Ecce Homo', 'jpg'],
+        ['macaca-nigra-self-portrait-large', 'Self-Portrait Ape', 'jpg'],
+        ['joshua-reynolds-david-garrick-between-tr', 'Tragedy and Comedy', 'jpg'],
+        ['a-message-from-captain-obvious', 'Captain Obvious', 'jpg'],
+        ['captain-obvious-strikes-again-flickr-k-e', 'Captain Obvious II', 'jpg'],
+        ['thank-you-captain-obvious-3464853227', 'Thank You, Captain Obvious', 'jpg'],
+        ['captain-bvious', 'Captain Öbvious', 'jpg'],
+        ['deepfried-meme-w', 'Deep Fried Meme W', 'jpg'],
+        ['deep-fried-blue-gatorade', 'Deep Fried Gatorade', 'jpg'],
+        ['deep-fried-meme', 'Deep Fried Meme', 'jpg'],
+        ['deepfriedpepsican', 'Deep Fried Pepsi Can', 'jpg'],
+        ['icon-on-my-wikipedia-userbox', 'Shiny Coin (WMF Userbox)', 'png'],
+        ['chaotic-evil', 'Chaotic Evil', 'gif'],
+        ['lawful-good', 'Lawful Good', 'gif'],
+        ['lawful-neutral', 'Lawful Neutral', 'gif'],
+        ['lawful-evil', 'Lawful Evil', 'gif'],
+        ['chaotic-good', 'Chaotic Good', 'gif'],
+        ['chaotic-neutral', 'Chaotic Neutral', 'gif'],
+        ['alignment-chart', 'Alignment Chart', 'png'],
+        ['3-3-alignment', 'Alignment Chart 3x3', 'png'],
+        ['dnd-alignment-chart', 'DND Alignment Chart', 'svg'],
+        ['party-parrot', 'Party Parrot', 'svg'],
+        ['original-party-parrot', 'Party Parrot GIF', 'gif'],
+        ['the-femboy-hooters-jingle-ranch-sauce', 'Femboy Hooters Jingle', 'gif'],
+        ['dydchart', 'DYD Chart', 'png'],
+        ['commons-tan-iceberg-chart-blank-template', 'Iceberg Chart', 'png'],
+        ['texts-from-hillary', 'Texts from Hillary', 'png'],
+        ['ready-for-hillary-15696891292', 'Ready for Hillary', 'jpg'],
+        ['hillary-bus-15671686926', 'Hillary Bus', 'jpg'],
+        ['madame-secretary-text-drive', 'Text & Drive', 'jpg'],
+        ['screamer2', 'Screamer 2', 'gif'],
+        ['screamer3', 'Screamer 3', 'gif'],
+        ['chelovechek', 'Chelovechek', 'jpg'],
       ]},
     ];
     const existing = new Set((await this.allTemplates()).map((t) => t.id));
     for (const g of groups) {
-      let changed = false;
       for (const [key, name, ext = 'svg'] of g.files) {
         const id = `builtin_${key}`; // feste IDs, damit Studio-Links stabil bleiben
         if (existing.has(id)) continue;
@@ -146,22 +179,23 @@ export const Packs = {
         if (!res.ok) continue;
         const blob = await res.blob();
         await this.addTemplate({
-          id, name, blob, mime: ext === 'svg' ? 'image/svg+xml' : `image/${ext}`,
+          id, name, blob, mime: res.type || `image/${ext}`,
           builtin: true, packId: g.packId, shared: null,
           createdAt: Date.now(),
         });
-        changed = true;
       }
       const packs = await this.allPacks();
       const pack = packs.find((p) => p.id === g.packId);
       if (!pack) {
         await this.createPackRaw(g.packId, g.name, true, g.files.map(([k]) => `builtin_${k}`));
-      } else if (changed) {
+      } else {
+        // tplIds immer synchronisieren (idempotent) – auch wenn Templates schon vorher existierten
+        let dirty = false;
         for (const [key] of g.files) {
           const id = `builtin_${key}`;
-          if (!pack.tplIds.includes(id)) pack.tplIds.push(id);
+          if (!pack.tplIds.includes(id)) { pack.tplIds.push(id); dirty = true; }
         }
-        await this.updatePack(pack);
+        if (dirty) await this.updatePack(pack);
       }
     }
     LS.set('builtinsInstalled', 2);
