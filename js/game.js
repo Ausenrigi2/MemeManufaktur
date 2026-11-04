@@ -1,7 +1,7 @@
 // ============ Meme-Partie: Lobby + Spiel-Phasen ============
 import { el, t, rand, shuffle, toast, confetti, roomCode, uid } from './lib.js';
 import { MemeCanvas, renderMemeToDataUrl } from './editor.js';
-import { zoneFor, layerPatch } from './textzones.js';
+import { zoneFor, layerPatch, normLayers } from './textzones.js';
 import { Packs, ServerAPI } from './packs.js';
 import { Room } from './net.js';
 
@@ -69,30 +69,7 @@ async function pickTemplates(count, mode, idList = [], ownPools = null) {
   return out;
 }
 
-function livePreview(canvas, tplBlob, id = '') {
-  const mc = new MemeCanvas(canvas);
-  let topL = null, botL = null, ready = false;
-  (async () => {
-    try {
-      await mc.setImage(tplBlob);
-      const base = Math.min(mc.cw, mc.ch);
-      const z = zoneFor(id);
-      const def = (y) => ({ y, fontSize: Math.round(base * 0.11), strokeWidth: Math.max(5, Math.round(base * 0.012)) });
-      topL = mc.addLayer({ text: '', ...(layerPatch(mc, z?.top) || def(Math.round(base * 0.13))) });
-      botL = mc.addLayer({ text: '', ...(layerPatch(mc, z?.bottom) || def(mc.ch - Math.round(base * 0.13))) });
-      mc.selectedId = null;
-      mc.render();
-      ready = true;
-    } catch (e) { console.error(e); }
-  })();
-  return {
-    set(top, bottom) {
-      if (!ready || !topL) return;
-      mc.updateLayer(topL.id, { text: String(top) });
-      mc.updateLayer(botL.id, { text: String(bottom) });
-    },
-  };
-}
+// Mini-Studio in der Runde: beliebig viele Textfelder, Klick/Drag auf dem Bild positioniert das fokussierte Feld
 
 // ============ Gemeinsame Views ============
 // ============ Lobby (erstellen + beitreten) ============
@@ -371,15 +348,16 @@ export function handleHostSubmit(msg) {
   if (!msg?.selfId) return;
   const top = String(msg.top ?? '').slice(0, 200);
   const bottom = String(msg.bottom ?? '').slice(0, 200);
+  const layers = normLayers(msg.layers);
   const found = lanState.memes.find((m) => m.playerId === msg.selfId);
   if (found) {
-    found.top = top; found.bottom = bottom;
+    found.top = top; found.bottom = bottom; found.layers = layers;
     lanState.turnAdvance?.();
     return;
   }
   const p = lanState.players.find((x) => x.id === msg.selfId);
   if (!p) return;
-  lanState.memes.push({ playerId: p.id, name: p.name, top, bottom, tplKey: lanState.assignments.get(p.id) || null });
+  lanState.memes.push({ playerId: p.id, name: p.name, top, bottom, layers, tplKey: lanState.assignments.get(p.id) || null });
   lanState.turnAdvance?.();
 }
 
@@ -404,24 +382,51 @@ function doTurn(msg) {
     const tpl = await resolveTpl(msg.tplKey);
     if (!tpl) throw new Error('Template fehlt');
     const canvas = el('canvas', { width: 640, height: 640 });
-    const preview = livePreview(canvas, tpl.blob, tpl.id);
-    const topIn = el('textarea', { rows: 2, placeholder: t('spiel.turn.top') });
-    const botIn = el('textarea', { rows: 2, placeholder: t('spiel.turn.bottom') });
+    const mc = new MemeCanvas(canvas);
+    const fieldsWrap = el('div', { class: 'turn-fields' });
+    const rows = new Map();
+
+    function addRow(layer) {
+      const inp = el('textarea', { rows: 2, placeholder: t('spiel.turn.field', { n: rows.size + 1 }) });
+      const row = el('div', { style: 'display:flex;gap:6px;align-items:flex-start;margin-bottom:8px' },
+        inp,
+        el('button', { class: 'btn btn-sm btn-red', type: 'button', title: t('pakete.delTpl'), onclick: () => { mc.removeLayer(layer.id); row.remove(); rows.delete(layer.id); } }, '🗑'),
+      );
+      inp.addEventListener('input', () => { mc.updateLayer(layer.id, { text: inp.value }); });
+      inp.addEventListener('focus', () => { if (mc.selectedId !== layer.id) mc.select(layer.id); });
+      rows.set(layer.id, inp);
+      fieldsWrap.append(row);
+    }
+
+    mc.onChange = () => { if (rows.has(mc.selectedId)) rows.get(mc.selectedId).focus(); };
+    mc.bindPointer();
+    await mc.setImage(tpl.blob);
+    const base = Math.min(mc.cw, mc.ch);
+    const z = zoneFor(tpl.id);
+    const def = (y) => ({ y, fontSize: Math.round(base * 0.11), strokeWidth: Math.max(5, Math.round(base * 0.012)) });
+    addRow(mc.addLayer({ text: '', ...(layerPatch(mc, z?.top) || def(Math.round(base * 0.13))) }));
+    addRow(mc.addLayer({ text: '', ...(layerPatch(mc, z?.bottom) || def(mc.ch - Math.round(base * 0.13))) }));
+
     const timerWrap = el('div', { class: 'timerbar' }, el('i'));
-    const submitBtn = el('button', { class: 'btn btn-green', onclick: () => finish(topIn.value, botIn.value) }, '✅ ' + t('spiel.turn.submit'));
-    const upd = () => preview.set(topIn.value, botIn.value);
-    topIn.addEventListener('input', upd);
-    botIn.addEventListener('input', upd);
+
+    function finish() {
+      if (settled) return;
+      settled = true;
+      const room = lanState.room;
+      const layers = mc.layers.map((l) => ({ text: String(l.text).slice(0, 200), xF: +(l.x / mc.cw).toFixed(3), yF: +(l.y / mc.ch).toFixed(3), fsF: +(l.fontSize / base).toFixed(3) }));
+      room.send({ type: 'submit', selfId: room.selfId, layers });
+    }
 
     app.innerHTML = '';
     app.append(el('div', { class: 'wrap phase-screen' },
       el('h1', {}, `${t('spiel.turn.yours')}${msg.theme ? ` · 🎭 ${msg.theme}` : ''}`),
       el('div', { class: 'turn-box card' },
         el('div', { class: 'meme-preview' }, canvas),
-        el('label', {}, t('spiel.turn.top')), topIn,
-        el('label', { style: 'margin-top:10px' }, t('spiel.turn.bottom')), botIn,
+        el('p', { style: 'color:var(--muted);font-size:0.85rem' }, t('spiel.turn.place')),
+        fieldsWrap,
+        el('button', { class: 'btn btn-sm', type: 'button', onclick: () => addRow(mc.addLayer({ text: '' })) }, '+ ' + t('studio.addLayer')),
         timerWrap,
-        el('div', { style: 'margin-top:14px' }, submitBtn),
+        el('div', { style: 'margin-top:14px' }, el('button', { class: 'btn btn-green', onclick: finish }, '✅ ' + t('spiel.turn.submit'))),
       ),
     ));
 
@@ -432,15 +437,8 @@ function doTurn(msg) {
       const left = Math.max(0, leftSec - Math.floor((Date.now() - startedAt) / 1000));
       timerWrap.firstElementChild.style.width = (left / leftSec) * 100 + '%';
       timerWrap.classList.toggle('warn', left <= 10);
-      if (left <= 0) { clearInterval(iv); finish(topIn.value, botIn.value); }
+      if (left <= 0) { clearInterval(iv); finish(); }
     }, 250);
-  }
-
-  function finish(top, bottom) {
-    if (settled) return;
-    settled = true;
-    const room = lanState.room;
-    room.send({ type: 'submit', selfId: room.selfId, top: String(top).slice(0, 200), bottom: String(bottom).slice(0, 200) });
   }
 
   setupPreview();
@@ -459,7 +457,7 @@ function doVote(msg) {
     (async () => {
       const tpl = await resolveTpl(m.tplKey);
       if (!tpl) return;
-      img.src = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom });
+      img.src = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom, layers: m.layers });
     })();
     const upB = el('button', { class: 'vbtn vbtn-up', title: t('spiel.vote.up') }, '👍');
     const dnB = el('button', { class: 'vbtn vbtn-down', title: t('spiel.vote.down') }, '👎');
@@ -500,7 +498,7 @@ function doResult(msg) {
     const img = el('img', { alt: s.name });
     (async () => {
       const tpl = await resolveTpl(s.tplKey);
-      if (tpl) img.src = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: s.top, bottom: s.bottom });
+      if (tpl) img.src = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: s.top, bottom: s.bottom, layers: s.layers });
     })();
     rows.append(el('div', { class: `result-row${s.pts === Math.max(...msg.scores.map((x) => x.pts)) && s.pts > 0 ? ' winner' : ''}` },
       img,
@@ -527,7 +525,7 @@ function doFinal(msg) {
         const img = el('img', { alt: m.name });
         (async () => {
           const tpl = await resolveTpl(m.tplKey);
-          if (tpl) img.src = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom });
+          if (tpl) img.src = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom, layers: m.layers });
         })();
         return el('div', { class: 'vote-card' }, img, el('div', { class: 'vote-meta' }, m.name, ' · ' + m.pts + ' P.'));
       }),
@@ -612,7 +610,7 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
     };
 
     function startVoting() {
-      const memes = lanState.memes.map((m) => ({ playerId: m.playerId, name: m.name, top: m.top, bottom: m.bottom, tplKey: m.tplKey }));
+      const memes = lanState.memes.map((m) => ({ playerId: m.playerId, name: m.name, top: m.top, bottom: m.bottom, layers: m.layers, tplKey: m.tplKey }));
       // Alle voten gleichzeitig
       lanState.voting = true;
       for (const v of playerList) {
@@ -666,7 +664,7 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
           const best = [...lanState.allMemes]
             .sort((a, b) => b.pts - a.pts)
             .slice(0, 5)
-            .map((m) => ({ playerId: m.playerId, name: m.name, top: m.top, bottom: m.bottom, tplKey: m.tplKey, pts: m.pts }));
+            .map((m) => ({ playerId: m.playerId, name: m.name, top: m.top, bottom: m.bottom, layers: m.layers, tplKey: m.tplKey, pts: m.pts }));
           room.send({ type: 'final', standings, relaxed: cfg.relaxed, best });
         } else {
           runRound(r + 1);

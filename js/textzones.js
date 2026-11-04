@@ -4,6 +4,19 @@ export const TEXT_ZONES = {
   'awesome-face': { top: { xF: 0.78, yF: 0.25, fsF: 0.08 }, bottom: { xF: 0.78, yF: 0.55, fsF: 0.08 } },
 };
 
+// Normierte Text-Layer (Anteile 0..1) – reine Funktion, damit der Smoke-Test sie prüfen kann
+export function normLayers(layers) {
+  if (!Array.isArray(layers)) return [];
+  return layers.slice(0, 8)
+    .map((l) => ({
+      text: String(l.text || '').trim().slice(0, 200),
+      xF: Math.min(1, Math.max(0, Number(l.xF) || 0.5)),
+      yF: Math.min(1, Math.max(0, Number(l.yF) || 0.5)),
+      fsF: Math.min(0.2, Math.max(0.03, Number(l.fsF) || 0.11)),
+    }))
+    .filter((l) => l.text);
+}
+
 export function zoneFor(id) {
   return TEXT_ZONES[String(id || '').replace(/^builtin_/, '')] || null;
 }

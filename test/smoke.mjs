@@ -177,7 +177,19 @@ test('Delete: fremde private Entries nur vom Eigentümer', async () => {
 });
 
 // ============ Textzonen (pure Logik, ohne DOM) ============
-import { zoneFor, layerPatch } from '../js/textzones.js';
+import { zoneFor, layerPatch, normLayers } from '../js/textzones.js';
+
+test('normLayers clamps and drops empty layers', () => {
+  const norm = normLayers([
+    { text: 'hi', xF: 2, yF: -1, fsF: 0.5 },
+    { text: '   ' },
+    { text: 'x'.repeat(250) },
+  ]);
+  assert.equal(norm.length, 2);
+  assert.equal(norm[0].xF, 1); assert.equal(norm[0].yF, 0); assert.equal(norm[0].fsF, 0.2);
+  assert.equal(norm[1].text.length, 200); assert.equal(norm[1].xF, 0.5);
+  assert.deepEqual(normLayers(null), []);
+});
 
 test('text zones: lookup and layer patch', () => {
   assert.ok(zoneFor('builtin_awesome-face').top.yF > 0);

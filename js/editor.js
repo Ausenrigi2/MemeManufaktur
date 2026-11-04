@@ -1,6 +1,6 @@
 // ============ MemeCanvas – lokale Render-Engine ============
 import { uid } from './lib.js';
-import { zoneFor, layerPatch } from './textzones.js';
+import { zoneFor, layerPatch, normLayers } from './textzones.js';
 
 export const FONTS = {
   classic:   { label: 'Klassisch (Impact)', stack: "Impact,'Arial Black','Haettenschweiler',sans-serif", weight: 400 },
@@ -248,21 +248,30 @@ export class MemeCanvas {
 }
 
 // Render-Helper für Spiel-Vorschauen (deterministisch auf allen Clients)
-export async function renderMemeToDataUrl({ blob, top = '', bottom = '', id = '' }, width = 480) {
+export async function renderMemeToDataUrl({ blob, top = '', bottom = '', id = '', layers = null }, width = 480) {
   const canvas = document.createElement('canvas');
   const mc = new MemeCanvas(canvas);
   await mc.setImage(blob);
   const base = Math.min(mc.cw, mc.ch);
   const fs = Math.round(base * 0.11);
   const z = zoneFor(id);
-  const topText = String(top).trim();
-  const botText = String(bottom).trim();
-  if (topText) {
-    mc.addLayer({ text: topText, ...(layerPatch(mc, z?.top) || { y: Math.round(base * 0.13), fontSize: fs, strokeWidth: Math.max(4, Math.round(fs / 9)) }) });
+  const norm = normLayers(layers);
+  if (norm.length) {
+    for (const l of norm) {
+      const lfs = Math.round(base * l.fsF);
+      mc.addLayer({ text: l.text, x: Math.round(mc.cw * l.xF), y: Math.round(mc.ch * l.yF), fontSize: lfs, strokeWidth: Math.max(4, Math.round(lfs / 9)) });
+    }
     mc.selectedId = null;
-  }
-  if (botText) {
-    mc.addLayer({ text: botText, ...(layerPatch(mc, z?.bottom) || { y: mc.ch - Math.round(base * 0.13), fontSize: fs, strokeWidth: Math.max(4, Math.round(fs / 9)) }) });
+  } else {
+    const topText = String(top).trim();
+    const botText = String(bottom).trim();
+    if (topText) {
+      mc.addLayer({ text: topText, ...(layerPatch(mc, z?.top) || { y: Math.round(base * 0.13), fontSize: fs, strokeWidth: Math.max(4, Math.round(fs / 9)) }) });
+      mc.selectedId = null;
+    }
+    if (botText) {
+      mc.addLayer({ text: botText, ...(layerPatch(mc, z?.bottom) || { y: mc.ch - Math.round(base * 0.13), fontSize: fs, strokeWidth: Math.max(4, Math.round(fs / 9)) }) });
+    }
   }
   mc.render();
   return mc.toBlob('image/jpeg', 0.85).then((b) => {
