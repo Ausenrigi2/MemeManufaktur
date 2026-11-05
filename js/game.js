@@ -447,48 +447,93 @@ function doTurn(msg) {
 function doVote(msg) {
   if (msg.tpls) Object.assign(window.__lanTpls = window.__lanTpls || {}, msg.tpls);
   const app = document.getElementById('app');
-  const ups = new Set(), downs = new Set();
+  const list = msg.memes.filter((m) => m.playerId !== msg.myId);
+  if (!list.length) return;
+  const ups = new Set(), downs = new Set(), decided = new Set();
   let peak = null; // einmal pro Runde, bis zum Abgeben auf ein anderes Meme verschiebbar
-  const grid = el('div', { class: 'vote-grid' });
-  const cards = [];
-  for (const m of msg.memes) {
-    if (m.playerId === msg.myId) continue;
-    const img = el('img', { alt: m.name });
-    (async () => {
+  let sent = false, idx = 0, timer = null;
+  const cache = {}; // dataURLs cachen, damit Zurück nicht neu rendert
+
+  const img = el('img', { alt: '' });
+  const meta = el('div', { class: 'vote-meta' });
+  const upB = el('button', { class: 'vbtn vbtn-up', title: t('spiel.vote.up') }, '👍');
+  const dnB = el('button', { class: 'vbtn vbtn-down', title: t('spiel.vote.down') }, '👎');
+  const pkB = el('button', { class: 'vbtn vbtn-peak', title: t('spiel.vote.peak') }, '⛰️ PEAK');
+  const timerWrap = el('div', { class: 'timerbar' }, el('i'));
+  const status = el('p', { style: 'color:var(--muted)' });
+
+  function paint() {
+    const cur = list[idx];
+    upB.classList.toggle('active', ups.has(cur.playerId));
+    dnB.classList.toggle('active', downs.has(cur.playerId));
+    pkB.classList.toggle('active', peak === cur.playerId);
+    status.textContent = sent ? t('spiel.vote.wait') : `${idx + 1} / ${list.length}`;
+  }
+
+  async function show() {
+    const m = list[idx];
+    meta.textContent = m.name;
+    if (!cache[m.playerId]) {
       const tpl = await resolveTpl(m.tplKey);
       if (!tpl) return;
-      img.src = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom, layers: m.layers });
-    })();
-    const upB = el('button', { class: 'vbtn vbtn-up', title: t('spiel.vote.up') }, '👍');
-    const dnB = el('button', { class: 'vbtn vbtn-down', title: t('spiel.vote.down') }, '👎');
-    const pkB = el('button', { class: 'vbtn vbtn-peak', title: t('spiel.vote.peak') }, '⛰️ PEAK');
-    upB.addEventListener('click', (e) => { e.stopPropagation(); if (ups.has(m.playerId)) ups.delete(m.playerId); else { downs.delete(m.playerId); ups.add(m.playerId); } paint(); });
-    dnB.addEventListener('click', (e) => { e.stopPropagation(); if (downs.has(m.playerId)) downs.delete(m.playerId); else { ups.delete(m.playerId); downs.add(m.playerId); } paint(); });
-    pkB.addEventListener('click', (e) => { e.stopPropagation(); peak = peak === m.playerId ? null : m.playerId; paint(); });
-    grid.append(el('div', { class: 'vote-card' }, img, el('div', { class: 'vote-meta' }, m.name), el('div', { class: 'vote-btns' }, upB, dnB, pkB)));
-    cards.push({ id: m.playerId, up: upB, down: dnB, peak: pkB });
+      cache[m.playerId] = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom, layers: m.layers });
+    }
+    img.src = cache[m.playerId];
+    paint();
+    if (!sent) startTimer();
   }
-  function paint() {
-    for (const c of cards) {
-      c.up.classList.toggle('active', ups.has(c.id));
-      c.down.classList.toggle('active', downs.has(c.id));
-      c.peak.classList.toggle('active', peak === c.id);
+
+  function startTimer() {
+    clearInterval(timer);
+    const bar = timerWrap.firstElementChild;
+    let left = 10;
+    bar.style.width = '100%';
+    timer = setInterval(() => {
+      if (sent) { clearInterval(timer); return; }
+      left -= 0.25;
+      if (left <= 0) { clearInterval(timer); decide(); go(1); return; } // abgelaufen = entschieden ohne Stimme
+      bar.style.width = `${(left / 10) * 100}%`;
+    }, 250);
+  }
+
+  function go(delta) {
+    const next = Math.min(list.length - 1, Math.max(0, idx + delta));
+    if (next !== idx) { idx = next; show(); }
+  }
+
+  upB.addEventListener('click', () => { if (ups.has(list[idx].playerId)) ups.delete(list[idx].playerId); else { downs.delete(list[idx].playerId); ups.add(list[idx].playerId); } decide(); });
+  dnB.addEventListener('click', () => { if (downs.has(list[idx].playerId)) downs.delete(list[idx].playerId); else { ups.delete(list[idx].playerId); downs.add(list[idx].playerId); } decide(); });
+  pkB.addEventListener('click', () => { peak = peak === list[idx].playerId ? null : list[idx].playerId; paint(); });
+
+  function decide() {
+    if (sent) return;
+    decided.add(list[idx].playerId);
+    paint();
+    if (decided.size === list.length) {
+      sent = true;
+      clearInterval(timer);
+      lanState.room.send({ type: 'vote', selfId: lanState.room.selfId, ups: [...ups], downs: [...downs], peak });
+      paint();
     }
   }
-  const submitBtn = el('button', { class: 'btn btn-primary' }, '🗳️ ' + t('spiel.vote.submit'));
-  submitBtn.addEventListener('click', () => {
-    lanState.room.send({ type: 'vote', selfId: lanState.room.selfId, ups: [...ups], downs: [...downs], peak });
-  });
 
   app.innerHTML = '';
   app.append(el('div', { class: 'wrap phase-screen' },
     el('h1', {}, t('spiel.vote.title')),
     el('div', { class: 'card turn-box' },
       el('p', { style: 'font-weight:800' }, t('spiel.vote.hint')),
-      grid,
-      el('div', { style: 'margin-top:16px' }, submitBtn),
+      img,
+      meta,
+      el('div', { class: 'vote-btns' }, upB, dnB, pkB),
+      el('div', { style: 'display:flex;gap:8px;margin-top:12px' },
+        el('button', { class: 'btn btn-sm', type: 'button', onclick: () => go(-1) }, '← ' + t('spiel.vote.back')),
+        el('button', { class: 'btn btn-sm btn-blue', type: 'button', onclick: () => { decide(); if (!sent) go(1); } }, '→ ' + t('spiel.vote.skip')),
+      ),
+      timerWrap,
+      status,
     ),
   ));
+  show();
 }
 
 function doResult(msg) {
