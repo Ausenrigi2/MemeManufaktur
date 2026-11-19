@@ -1,9 +1,32 @@
 // ============ Meme-Partie: Lobby + Spiel-Phasen ============
-import { el, t, rand, shuffle, toast, confetti, roomCode, uid } from './lib.js';
+import { el, t, LS, rand, shuffle, toast, confetti, roomCode, uid } from './lib.js';
 import { MemeCanvas, renderMemeToDataUrl } from './editor.js';
 import { zoneFor, layerPatch, normLayers } from './textzones.js';
 import { Packs, ServerAPI } from './packs.js';
 import { Room } from './net.js';
+
+// Spiel-Styles liegen in css/game.css; index.html bleibt unangetastet.
+if (!document.querySelector('link[data-game-css]')) {
+  document.head.append(el('link', { rel: 'stylesheet', href: 'css/game.css', 'data-game-css': '' }));
+}
+
+function fallbackCopy(text) {
+  const tmp = el('input', { type: 'text', value: text, readonly: true, 'aria-hidden': 'true', tabindex: '-1', class: 'copy-helper' });
+  document.body.append(tmp);
+  tmp.select();
+  tmp.setSelectionRange(0, text.length);
+  const ok = document.execCommand?.('copy');
+  tmp.remove();
+  if (!ok) throw new Error('copy failed');
+}
+
+function copyText(text) {
+  return new Promise((resolve, reject) => {
+    const done = () => { try { fallbackCopy(text); resolve(); } catch { reject(new Error('copy failed')); } };
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(resolve, done);
+    else done();
+  });
+}
 
 export const THEMES = [
   'Montagmorgen',
@@ -34,8 +57,41 @@ export const THEMES = [
   'Der Meeting-Nachtrag um 22:41',
 ];
 
+const THEMES_EN = [
+  'Monday morning',
+  'Your browser with 47 tabs',
+  'First day at university',
+  'Wi-Fi on holiday',
+  'Your code at 2 a.m.',
+  'Vegan at the barbecue',
+  'Black Friday panic',
+  'Cat vs. window',
+  'The last seat in the cinema',
+  'Mum calls for the third time',
+  'Sunday gym session',
+  'Rush hour at 5:05 p.m.',
+  'Your group chat “we never reply”',
+  'Exam prep, week one',
+  'The printer that never finds paper',
+  'Sushi or curry?',
+  'Your alarm at 6 a.m.',
+  'Neighbourhood summer party',
+  'The last train home',
+  'Spreadsheet row 14,302',
+  'Game night, round one',
+  'The car boot before the holiday',
+  'Garage appointment, take two',
+  'Your garden in May',
+  'New Year’s Eve at 23:59',
+  'The follow-up meeting at 10:41 p.m.',
+];
+
 const INSPO_TOPS = ['WHEN THE', 'DER MOMENT ALS', 'POV: DU', 'WANN DICH', 'EINMAL', 'JEDER WEISS, DASS'];
-const INSPO_BOTTOMS = ['NIE WIEDER SLEEPS', 'DEIN CHAT VERLÄSST DEN RAUM', 'DAS BÄRKCHEN AUFTAUCHT', 'DU SCHON GEWUSST HAST', 'DER PLAN GEHT AUF', 'SIE DIE TÜR FALSCH AUFMAKT'];
+const INSPO_BOTTOMS = ['NIE WIEDER SLEEPS', 'DEIN CHAT VERLÄSST DEN RAUM', 'DAS BÄRKCHEN AUFTAUCHT', 'DU SCHON GEWUSST HAST', 'DER PLAN GEHT AUF', 'SIE DIE TÜR FALSCH AUFMACHT'];
+const INSPO_TOPS_EN = ['WHEN THE', 'THE MOMENT', 'POV: YOU', 'EVERY TIME', 'NOBODY TOLD ME', 'ME EXPLAINING'];
+const INSPO_BOTTOMS_EN = ['WI-FI DIES AGAIN', 'YOUR CHAT LEAVES THE ROOM', 'THE PLOT TWIST ARRIVES', 'YOU ALREADY KNEW', 'THE PLAN WORKS OUT', 'THEY OPEN THE WRONG DOOR'];
+
+function themesForLang() { return LS.get('lang', 'de') === 'en' ? THEMES_EN : THEMES; }
 
 export async function resolveTpl(key) {
   if (!key) return null;
@@ -76,42 +132,58 @@ async function pickTemplates(count, mode, idList = [], ownPools = null) {
 export async function openLobby(container) {
   container.innerHTML = '';
   if (!ServerAPI.available) {
-    container.append(el('div', { class: 'card', style: 'max-width:560px' },
-      el('h2', {}, t('lobby.title')),
-      el('p', { style: 'color:var(--muted)' }, t('lobby.needserver')),
+    container.append(el('div', { class: 'wrap' },
+      el('div', { class: 'card', style: 'max-width:560px;margin:34px auto' },
+        el('h2', {}, t('lobby.title')),
+        el('p', { style: 'color:var(--muted)' }, t('lobby.needserver')),
+      ),
     ));
     return;
   }
 
   const nameInput = el('input', { type: 'text', name: 'name', autocomplete: 'name', value: 'Gast_' + Math.floor(Math.random() * 900 + 100) });
-  const lobbyInput = el('input', { type: 'text', name: 'lobby' });
-  const codeInput = el('input', { type: 'text', name: 'code', maxlength: 4, style: 'width:110px;text-transform:uppercase' });
-  const statusEl = el('p', { style: 'font-weight:700;color:var(--muted)', 'aria-live': 'polite', hidden: true });
+  const lobbyInput = el('input', { type: 'text', name: 'lobby', placeholder: t('lobby.name') });
+  const codeInput = el('input', { type: 'text', name: 'code', maxlength: 4, 'aria-label': t('lobby.byCode') });
+  // Einladungslink (#/spiel?code=XXXX) füllt den Code direkt vor.
+  const wantsCode = new URLSearchParams(location.hash.split('?')[1] || '').get('code');
+  if (wantsCode) codeInput.value = wantsCode.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+  const statusEl = el('p', { style: 'font-weight:800;color:var(--muted)', 'aria-live': 'polite', hidden: true });
   let poll = null;
+  let entering = false;
 
-  async function join(code, opts) {
+  async function join(code, opts = {}) {
     const name = nameInput.value.trim();
     if (!name) { toast(t('spiel.yourName')); return; }
+    if (entering) return;
+    entering = true;
     clearInterval(poll);
     await enterLobby({ code, host: !!opts.host, name, statusEl, lobby: opts.lobby, pub: !!opts.pub });
   }
 
-  function createLobby() {
-    const vis = document.querySelector('input[name="vis"]:checked')?.value || 'public';
-    join(roomCode(), { host: true, pub: vis === 'public', lobby: lobbyInput.value.trim() || null });
+  function createLobby(pub) {
+    join(roomCode(), { host: true, pub, lobby: lobbyInput.value.trim() || null });
   }
+
+  async function quickPlay() {
+    let list = [];
+    try { list = await ServerAPI.lobbies(); } catch { list = []; }
+    if (list.length) join(list[0].code, { pub: true });
+    else createLobby(true);
+  }
+
   function joinByCode() {
     const code = codeInput.value.trim().toUpperCase();
     if (!/^[A-Z0-9]{4}$/.test(code)) { toast(t('lobby.codeBad')); return; }
     join(code, {});
   }
+  codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') joinByCode(); });
 
   const listWrap = el('div', { class: 'lobby-list' });
   async function renderLobbies() {
     let list = [];
     try { list = await ServerAPI.lobbies(); } catch { return; }
     listWrap.innerHTML = '';
-    if (!list.length) { listWrap.append(el('p', { style: 'color:var(--muted)' }, t('lobby.noOpen'))); return; }
+    if (!list.length) { listWrap.append(el('p', { style: 'color:var(--muted);margin:0' }, t('lobby.noOpen'))); return; }
     for (const l of list) {
       listWrap.append(el('div', { class: 'lobby-row' },
         el('span', {}, (l.name || l.code) + ' · ' + t('lobby.playersIn', { n: l.players })),
@@ -120,36 +192,62 @@ export async function openLobby(container) {
     }
   }
 
-  const visCards = ['public', 'private'].map((v) => el('label', { class: 'mode-card' },
-    el('input', { type: 'radio', name: 'vis', value: v, ...(v === 'public' ? { checked: 'checked' } : {}) }),
-    el('span', {}, t('lobby.' + v)),
-  ));
+  function art(names) {
+    return el('span', { class: 'pc-stack', 'aria-hidden': 'true' },
+      ...names.map((n) => el('img', { src: `assets/templates/${n}`, alt: '' })),
+    );
+  }
 
   container.append(
-    el('div', { class: 'wrap game-grid' },
-      el('div', { class: 'card' },
-        el('h2', {}, t('lobby.create')),
-        el('label', {}, t('spiel.yourName')), nameInput,
-        el('div', { class: 'fieldrow', style: 'margin-top:12px' },
-          el('div', { class: 'grow' }, el('label', {}, t('lobby.name')), lobbyInput),
-        ),
-        el('label', {}, t('lobby.visibility')),
-        el('div', { class: 'mode-cards' }, ...visCards),
-        el('div', { style: 'margin-top:16px' }, el('button', { class: 'btn btn-primary', type: 'button', onclick: createLobby }, '🚀 ' + t('lobby.create'))),
+    el('div', { class: 'wrap home' },
+      el('section', { class: 'home-hero' },
+        el('span', { class: 'kicker' }, '🎉 ' + t('home.kicker')),
+        el('h1', { html: t('home.title') }),
+        el('p', { class: 'home-lead' }, t('home.lead')),
       ),
-      el('div', { class: 'card' },
-        el('h2', {}, t('lobby.openList')),
-        listWrap,
-        el('h3', { style: 'margin-top:18px' }, t('lobby.byCode')),
-        el('div', { class: 'fieldrow' }, codeInput, el('button', { class: 'btn btn-blue', type: 'button', onclick: joinByCode }, '🔑 ' + t('lobby.join'))),
-        statusEl,
+      el('div', { class: 'home-fields' },
+        el('div', {}, el('label', {}, t('spiel.yourName')), nameInput),
+        el('div', {}, el('label', {}, t('home.lobbyName')), lobbyInput),
+      ),
+      el('div', { class: 'play-grid' },
+        el('button', { class: 'play-card quick', type: 'button', onclick: quickPlay },
+          el('span', { class: 'pc-emoji' }, '⚡'),
+          el('span', { class: 'pc-title' }, t('home.quick')),
+          el('span', { class: 'pc-desc' }, t('home.quick.d')),
+          el('span', { class: 'pc-cta' }, t('home.quick.cta') + ' →'),
+          art(['original-party-parrot.gif', 'awesome-face.svg', 'deepfriedpepsican.jpg']),
+        ),
+        el('button', { class: 'play-card private', type: 'button', onclick: () => createLobby(false) },
+          el('span', { class: 'pc-emoji' }, '🔒'),
+          el('span', { class: 'pc-title' }, t('home.private')),
+          el('span', { class: 'pc-desc' }, t('home.private.d')),
+          el('span', { class: 'pc-cta' }, t('home.private.cta') + ' →'),
+          art(['chelovechek.jpg', 'deep-fried-blue-gatorade.jpg', 'yuno-lego.jpg']),
+        ),
+      ),
+      el('div', { class: 'home-lower' },
+        el('div', { class: 'card home-panel' },
+          el('h2', {}, '🌍 ' + t('lobby.openList')),
+          listWrap,
+          el('h3', {}, t('lobby.byCode')),
+          el('div', { class: 'join-code' }, codeInput, el('button', { class: 'btn btn-blue', type: 'button', onclick: joinByCode }, t('lobby.join'))),
+          statusEl,
+        ),
+        el('section', { class: 'how' },
+          el('h2', {}, t('home.how')),
+          el('div', { class: 'how-grid' },
+            ...[t('home.step1'), t('home.step2'), t('home.step3')].map((label, i) =>
+              el('div', { class: 'how-step' }, el('b', {}, String(i + 1)), el('span', {}, label)),
+            ),
+          ),
+        ),
       ),
     ),
   );
 
   renderLobbies();
   // shortcut: polling alle 5s, wenn die Lobby-Liste lebt; upgrade auf WS-Push, wenn Live-Updates gefordert sind
-  poll = setInterval(() => { if (!container.isConnected) return clearInterval(poll); renderLobbies(); }, 5000);
+  poll = setInterval(() => { if (!listWrap.isConnected) return clearInterval(poll); renderLobbies(); }, 5000);
 }
 
 function enterLobby({ code, host, name, statusEl, lobby, pub }) {
@@ -157,12 +255,13 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
     const app = document.getElementById('app');
     const room = new Room(code, name, { lobby, pub });
     const players = new Map(); // selfId -> name
-    let hostId = null;
     let myId = room.selfId;
+    let hostId = host ? myId : null;
     let leftGame = false;
     let startedFlag = false; // true sobald „start“ im Raum angekommen ist
     let ownKeys = []; // eigene Server-Keys dieser Person ('srv:...')
     lanState.room = room;
+    window.__mmInGame = true;
 
     function setStatus(msg) {
       if (!statusEl) return;
@@ -177,9 +276,30 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
 
     function renderLobby() {
       lobbyCard.innerHTML = '';
+      const inviteUrl = `${location.origin}${location.pathname}#/spiel?code=${encodeURIComponent(code)}`;
+
+      async function copyInvite() {
+        try {
+          await copyText(`${t('spiel.invite.text', { code })} ${inviteUrl}`);
+          toast(t('spiel.invite.copied'));
+        } catch {
+          toast(t('spiel.invite.failed'));
+        }
+      }
+
       lobbyCard.append(
         el('h2', {}, t('spiel.lobby')),
-        el('p', { style: 'font-weight:700' }, t('spiel.lobby.code') + ': ', el('code', { style: 'font-size:1.4rem;background:var(--yellow);border:var(--border);padding:4px 14px;border-radius:10px' }, code)),
+        el('div', { class: 'lobby-code' },
+          el('span', { class: 'lobby-code-label' }, t('spiel.lobby.code')),
+          el('div', { class: 'invite-bar' },
+            el('code', { class: 'invite-code' }, code),
+            el('button', {
+              class: 'btn btn-sm invite-copy', type: 'button',
+              title: t('spiel.invite.copy'), 'aria-label': t('spiel.invite.copy'),
+              onclick: copyInvite,
+            }, '🔗 ' + t('spiel.invite.copy')),
+          ),
+        ),
         el('label', {}, t('spiel.players')),
         chipsWrap,
       );
@@ -191,15 +311,27 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
       if (ownKeys.length && cfg.ownPacks) lobbyCard.append(el('p', { style: 'color:var(--muted);font-size:0.85rem;margin-top:10px' }, t('spiel.ownPacks.use')));
       if (cfg.ownPacks) lobbyCard.append(el('p', { style: 'color:var(--muted);font-size:0.85rem;margin-top:10px' }, t('spiel.ownPacks.on')));
       if (hostId === myId) {
-        lobbyCard.append(el('div', { style: 'display:flex;gap:10px;margin-top:16px;flex-wrap:wrap' },
-          el('button', { class: 'btn btn-primary', onclick: () => startFromLobby() }, '🚀 ' + t('spiel.start')),
-          el('button', { class: 'btn', onclick: () => leave() }, '← ' + t('spiel.final.home')),
+        const canStart = players.size >= 2;
+        lobbyCard.append(el('div', { class: 'lobby-actions' },
+          el('button', {
+            class: 'btn btn-primary', type: 'button', disabled: !canStart,
+            title: canStart ? null : t('spiel.lobby.needPlayers'),
+            onclick: () => startFromLobby(),
+          }, '🚀 ' + t('spiel.start')),
+          el('button', { class: 'btn', type: 'button', onclick: () => leave() }, '← ' + t('spiel.final.home')),
         ));
+        if (!canStart) lobbyCard.append(el('p', { class: 'lobby-hint', role: 'status' }, '⏳ ' + t('spiel.lobby.needPlayers')));
       } else {
-        lobbyCard.append(el('div', { style: 'margin-top:16px;display:flex;gap:10px' },
-          el('span', { style: 'align-self:center;font-weight:700;color:var(--muted)' }, t('spiel.lobby.wait')),
-          el('button', { class: 'btn', onclick: () => leave() }, '← ' + t('spiel.final.home')),
-        ));
+        lobbyCard.append(
+          el('div', { class: 'lobby-waitbox', role: 'status', 'aria-live': 'polite' },
+            el('span', { class: 'wait-dots', 'aria-hidden': 'true' }, el('i'), el('i'), el('i')),
+            el('strong', {}, t('spiel.lobby.hostWait')),
+            el('p', { class: 'lobby-hint' }, t('spiel.lobby.guestHint')),
+          ),
+          el('div', { class: 'lobby-actions' },
+            el('button', { class: 'btn', type: 'button', onclick: () => leave() }, '← ' + t('spiel.final.home')),
+          ),
+        );
       }
       if (setupCardOuter) setupCardOuter.style.display = hostId === myId ? '' : 'none';
     }
@@ -213,15 +345,18 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
       for (const m of ['random', 'same', 'theme']) {
         radios.append(el('label', { class: 'mode-card' },
           el('input', { type: 'radio', name: 'lm', value: m, checked: m === 'random' ? 'checked' : '' }),
-          el('span', {}, t(`spiel.modes.${m}`)),
+          el('span', { class: 'mode-copy' },
+            el('strong', {}, t(`spiel.modes.${m}`)),
+            el('small', {}, t(`spiel.modes.${m}.d`)),
+          ),
         ));
       }
       radios.querySelectorAll('input').forEach((r) => r.addEventListener('change', () => set('mode', radios.querySelector('input:checked').value)));
       const rel = el('input', { type: 'checkbox' });
       rel.addEventListener('change', () => set('relaxed', rel.checked));
-      const roundsSel = el('select', {}, ...[3, 4, 5, 6, 7, 8, 9].map((n) => el('option', { value: n, ...(n === 3 ? { selected: '' } : {}) }, String(n))));
+      const roundsSel = el('select', {}, ...[1, 2, 3, 4, 5, 6, 7, 8].map((n) => el('option', { value: n, ...(n === 3 ? { selected: '' } : {}) }, String(n))));
       roundsSel.addEventListener('change', () => set('rounds', Number(roundsSel.value) || 3));
-      const timeSel = el('select', {}, ...[60, 90, 120, 150].map((n) => el('option', { value: n, ...(n === 90 ? { selected: '' } : {}) }, n + ' s')));
+      const timeSel = el('select', {}, ...[45, 60, 90, 120].map((n) => el('option', { value: n, ...(n === 90 ? { selected: '' } : {}) }, n + ' s')));
       timeSel.addEventListener('change', () => set('timeSec', Number(timeSel.value) || 90));
       const ownChk = el('input', { type: 'checkbox' });
       ownChk.addEventListener('change', () => set('ownPacks', ownChk.checked));
@@ -244,12 +379,23 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
     app.append(el('div', { class: 'wrap' }, lobbyCard, setupCardOuter, gameArea));
     renderLobby();
 
-    function leave() {
+    function hardLeave() {
       leftGame = true;
+      window.__mmInGame = false;
       if (lanState.room === room) lanState.room = null;
       room.close();
+    }
+    function leave() {
+      hardLeave();
       location.hash = '#/';
     }
+
+    // Wer die Spiel-Route per Navigation verlässt, verlässt auch den Raum –
+    // sonst warten die anderen auf eine Caption/Stimme, die nie kommt.
+    window.addEventListener('hashchange', () => {
+      if (!leftGame && !location.hash.startsWith('#/spiel')) hardLeave();
+    });
+    window.addEventListener('pagehide', () => { try { room.close(); } catch {} }, { once: true });
 
     async function sendOwnPack() {
       try {
@@ -285,6 +431,10 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
           break;
         case 'left':
           players.delete(msg.selfId);
+          if (hostId === myId && startedFlag) {
+            if (lanState.collecting) handleHostSubmit({ selfId: msg.selfId, layers: [] });
+            if (lanState.voting) window.__lanHostVote({ selfId: msg.selfId, ups: [], downs: [], peak: null });
+          }
           if (hostId === msg.selfId) {
             if (!startedFlag) {
               // Noch in der Lobby: nächste:r Spieler:in wird Host
@@ -369,8 +519,9 @@ async function announceStart(msg) {
   app.innerHTML = '';
   app.append(el('div', { class: 'wrap phase-screen waiting' },
     el('div', { class: 'spinner-meme' }, '🎬'),
-    el('h1', {}, 'Runde 1 beginnt gleich …'),
+    el('h1', {}, t('spiel.round.start', { n: 1 })),
   ));
+  window.scrollTo(0, 0);
 }
 
 function doTurn(msg) {
@@ -424,11 +575,25 @@ function doTurn(msg) {
         el('div', { class: 'meme-preview' }, canvas),
         el('p', { style: 'color:var(--muted);font-size:0.85rem' }, t('spiel.turn.place')),
         fieldsWrap,
-        el('button', { class: 'btn btn-sm', type: 'button', onclick: () => addRow(mc.addLayer({ text: '' })) }, '+ ' + t('studio.addLayer')),
+        el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
+          el('button', { class: 'btn btn-sm', type: 'button', onclick: () => addRow(mc.addLayer({ text: '' })) }, '+ ' + t('studio.addLayer')),
+          el('button', {
+            class: 'btn btn-sm', type: 'button',
+            onclick: () => {
+              const target = rows.get(mc.selectedId) || [...rows.values()].find((n) => !n.value.trim()) || [...rows.values()][0];
+              if (!target) return;
+              const en = LS.get('lang', 'de') === 'en';
+              target.value = en ? rand(INSPO_TOPS_EN.concat(INSPO_BOTTOMS_EN)) : rand(INSPO_TOPS.concat(INSPO_BOTTOMS));
+              target.dispatchEvent(new Event('input', { bubbles: true }));
+              target.focus();
+            },
+          }, '💡 ' + t('spiel.turn.inspo')),
+        ),
         timerWrap,
         el('div', { style: 'margin-top:14px' }, el('button', { class: 'btn btn-green', onclick: finish }, '✅ ' + t('spiel.turn.submit'))),
       ),
     ));
+    window.scrollTo(0, 0);
 
     const leftSec = Math.max(1, Math.round((msg.until - Date.now()) / 1000));
     const startedAt = Date.now();
@@ -441,43 +606,93 @@ function doTurn(msg) {
     }, 250);
   }
 
-  setupPreview();
+  setupPreview().catch((e) => {
+    console.error(e);
+    if (settled) return;
+    settled = true;
+    toast('⚠️ ' + t('spiel.turn.error'));
+    const room = lanState.room;
+    room?.send({ type: 'submit', selfId: room.selfId, layers: [] });
+    app.innerHTML = '';
+    app.append(el('div', { class: 'wrap phase-screen' },
+      el('h1', {}, t('spiel.turn.yours')),
+      el('div', { class: 'card phase-wait' },
+        el('div', { class: 'spinner-meme', 'aria-hidden': 'true' }, '⏭️'),
+        el('p', { class: 'wait-title' }, t('spiel.turn.error')),
+        el('p', { class: 'lobby-hint' }, t('spiel.vote.wait')),
+      ),
+    ));
+  });
 }
 
 function doVote(msg) {
   if (msg.tpls) Object.assign(window.__lanTpls = window.__lanTpls || {}, msg.tpls);
   const app = document.getElementById('app');
+  const room = lanState.room;
   const list = msg.memes.filter((m) => m.playerId !== msg.myId);
-  if (!list.length) return;
+
+  if (!list.length) {
+    // Keine fremden Memes: sofort leer abstimmen, sonst wartet der Host bis zum Timeout.
+    room?.send({ type: 'vote', selfId: room.selfId, ups: [], downs: [], peak: null });
+    app.innerHTML = '';
+    app.append(el('div', { class: 'wrap phase-screen' },
+      el('h1', {}, t('spiel.vote.title')),
+      el('div', { class: 'card phase-wait' },
+        el('div', { class: 'spinner-meme', 'aria-hidden': 'true' }, '🗳️'),
+        el('p', { class: 'wait-title' }, t('spiel.vote.none')),
+        el('p', { class: 'lobby-hint', role: 'status' }, t('spiel.vote.wait')),
+      ),
+    ));
+    return;
+  }
+
+  // shortcut: festes Zeitbudget pro Meme (max. 50 s gesamt), damit auch 45-s-Runden
+  // vor dem Host-Vote-Timeout fertig werden; bei Bedarf Zeit aus voting-start mitgeben.
+  const perMeme = Math.max(4, Math.min(10, Math.floor(50 / list.length)));
   const ups = new Set(), downs = new Set(), decided = new Set();
   let peak = null; // einmal pro Runde, bis zum Abgeben auf ein anderes Meme verschiebbar
-  let sent = false, idx = 0, timer = null;
+  let sent = false, idx = 0, timer = null, autoTimer = null, showSeq = 0;
   const cache = {}; // dataURLs cachen, damit Zurück nicht neu rendert
 
-  const img = el('img', { alt: '' });
+  const img = el('img', { class: 'vote-img', alt: '' });
   const meta = el('div', { class: 'vote-meta' });
-  const upB = el('button', { class: 'vbtn vbtn-up', title: t('spiel.vote.up') }, '👍');
-  const dnB = el('button', { class: 'vbtn vbtn-down', title: t('spiel.vote.down') }, '👎');
-  const pkB = el('button', { class: 'vbtn vbtn-peak', title: t('spiel.vote.peak') }, '⛰️ PEAK');
-  const timerWrap = el('div', { class: 'timerbar' }, el('i'));
-  const status = el('p', { style: 'color:var(--muted)' });
+  const upB = el('button', { class: 'vbtn vbtn-up', type: 'button', title: t('spiel.vote.up'), 'aria-label': t('spiel.vote.up') }, '👍');
+  const dnB = el('button', { class: 'vbtn vbtn-down', type: 'button', title: t('spiel.vote.down'), 'aria-label': t('spiel.vote.down') }, '👎');
+  const pkB = el('button', { class: 'vbtn vbtn-peak', type: 'button', title: t('spiel.vote.peak'), 'aria-label': t('spiel.vote.peak'), 'aria-pressed': 'false' }, '⛰️ PEAK');
+  const timerWrap = el('div', { class: 'timerbar', 'aria-hidden': 'true' }, el('i'));
+  const secs = el('span', { class: 'vote-secs', 'aria-hidden': 'true' });
+  const step = el('p', { class: 'vote-step', 'aria-live': 'polite' });
+
+  function sendVote() {
+    sent = true;
+    clearInterval(timer);
+    clearTimeout(autoTimer);
+    autoTimer = null;
+    room?.send({ type: 'vote', selfId: room.selfId, ups: [...ups], downs: [...downs], peak });
+    paint();
+  }
 
   function paint() {
     const cur = list[idx];
     upB.classList.toggle('active', ups.has(cur.playerId));
     dnB.classList.toggle('active', downs.has(cur.playerId));
     pkB.classList.toggle('active', peak === cur.playerId);
-    status.textContent = sent ? t('spiel.vote.wait') : `${idx + 1} / ${list.length}`;
+    pkB.setAttribute('aria-pressed', String(peak === cur.playerId));
+    upB.disabled = dnB.disabled = pkB.disabled = sent;
+    step.textContent = sent ? t('spiel.vote.wait') : `${idx + 1} / ${list.length}`;
   }
 
   async function show() {
+    const seq = ++showSeq;
     const m = list[idx];
     meta.textContent = m.name;
     if (!cache[m.playerId]) {
       const tpl = await resolveTpl(m.tplKey);
-      if (!tpl) return;
+      // Fehlendes Template: Meme ohne Stimme überspringen statt hängen zu bleiben.
+      if (!tpl) { decide(); if (!sent) go(1); return; }
       cache[m.playerId] = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom, layers: m.layers });
     }
+    if (seq !== showSeq) return; // spätes Rendern eines alten Memes ignorieren
     img.src = cache[m.playerId];
     paint();
     if (!sent) startTimer();
@@ -486,58 +701,92 @@ function doVote(msg) {
   function startTimer() {
     clearInterval(timer);
     const bar = timerWrap.firstElementChild;
-    let left = 10;
+    let left = perMeme;
     bar.style.width = '100%';
+    timerWrap.classList.remove('warn');
+    secs.textContent = left + ' s';
     timer = setInterval(() => {
-      if (sent) { clearInterval(timer); return; }
-      left -= 0.25;
-      if (left <= 0) { clearInterval(timer); decide(); go(1); return; } // abgelaufen = entschieden ohne Stimme
-      bar.style.width = `${(left / 10) * 100}%`;
+      if (sent || !img.isConnected) { clearInterval(timer); return; }
+      left = Math.max(0, left - 0.25);
+      secs.textContent = Math.ceil(left) + ' s';
+      bar.style.width = `${(left / perMeme) * 100}%`;
+      timerWrap.classList.toggle('warn', left <= Math.min(3, perMeme / 2));
+      if (left <= 0) {
+        clearInterval(timer);
+        decide(); // abgelaufen = entschieden ohne Stimme
+        if (!sent) go(1);
+      }
     }, 250);
   }
 
+  // Nach Up/Down-Vote kurz warten (450 ms), dann weiter – nie doppelt, nie am Ende.
+  function scheduleAdvance() {
+    clearTimeout(autoTimer);
+    if (sent || idx >= list.length - 1) return;
+    autoTimer = setTimeout(() => {
+      autoTimer = null;
+      if (sent || !img.isConnected || idx >= list.length - 1) return;
+      go(1);
+    }, 450);
+  }
+
   function go(delta) {
+    clearInterval(timer); // alte Meme-Uhr nicht weiterlaufen lassen
+    clearTimeout(autoTimer);
+    autoTimer = null;
     const next = Math.min(list.length - 1, Math.max(0, idx + delta));
     if (next !== idx) { idx = next; show(); }
   }
 
-  upB.addEventListener('click', () => { if (ups.has(list[idx].playerId)) ups.delete(list[idx].playerId); else { downs.delete(list[idx].playerId); ups.add(list[idx].playerId); } decide(); });
-  dnB.addEventListener('click', () => { if (downs.has(list[idx].playerId)) downs.delete(list[idx].playerId); else { ups.delete(list[idx].playerId); downs.add(list[idx].playerId); } decide(); });
-  pkB.addEventListener('click', () => { peak = peak === list[idx].playerId ? null : list[idx].playerId; paint(); });
+  upB.addEventListener('click', () => {
+    if (sent) return;
+    const id = list[idx].playerId;
+    if (ups.has(id)) ups.delete(id); else { downs.delete(id); ups.add(id); }
+    decide(true);
+  });
+  dnB.addEventListener('click', () => {
+    if (sent) return;
+    const id = list[idx].playerId;
+    if (downs.has(id)) downs.delete(id); else { ups.delete(id); downs.add(id); }
+    decide(true);
+  });
+  pkB.addEventListener('click', () => {
+    if (sent) return;
+    peak = peak === list[idx].playerId ? null : list[idx].playerId;
+    paint();
+  });
 
-  function decide() {
+  function decide(advance = false) {
     if (sent) return;
     decided.add(list[idx].playerId);
     paint();
-    if (decided.size === list.length) {
-      sent = true;
-      clearInterval(timer);
-      lanState.room.send({ type: 'vote', selfId: lanState.room.selfId, ups: [...ups], downs: [...downs], peak });
-      paint();
-    }
+    if (decided.size === list.length) { sendVote(); return; }
+    if (advance) scheduleAdvance();
   }
 
   app.innerHTML = '';
-  app.append(el('div', { class: 'wrap phase-screen' },
+  app.append(el('div', { class: 'wrap phase-screen vote-screen' },
     el('h1', {}, t('spiel.vote.title')),
-    el('div', { class: 'card turn-box' },
-      el('p', { style: 'font-weight:800' }, t('spiel.vote.hint')),
+    el('div', { class: 'card turn-box vote-card-live' },
+      el('p', { class: 'vote-hint' }, t('spiel.vote.hint')),
       img,
       meta,
-      el('div', { class: 'vote-btns' }, upB, dnB, pkB),
-      el('div', { style: 'display:flex;gap:8px;margin-top:12px' },
+      el('div', { class: 'vote-btns vote-btns-live' }, upB, dnB, pkB),
+      el('div', { class: 'vote-nav' },
         el('button', { class: 'btn btn-sm', type: 'button', onclick: () => go(-1) }, '← ' + t('spiel.vote.back')),
         el('button', { class: 'btn btn-sm btn-blue', type: 'button', onclick: () => { decide(); if (!sent) go(1); } }, '→ ' + t('spiel.vote.skip')),
       ),
-      timerWrap,
-      status,
+      el('div', { class: 'vote-timer' }, timerWrap, secs),
+      step,
     ),
   ));
+  window.scrollTo(0, 0);
   show();
 }
 
 function doResult(msg) {
   const app = document.getElementById('app');
+  const isFinal = msg.round >= msg.rounds;
   const rows = el('div', { class: 'result-list' });
   for (const s of msg.scores) {
     const img = el('img', { alt: s.name });
@@ -552,11 +801,30 @@ function doResult(msg) {
       el('div', { class: 'pts' }, String(s.pts)),
     ));
   }
+
+  // Kleiner Countdown, passend zur Host-Pause von 5,2 s; keine Protokolländerung.
+  const hint = el('p', { class: 'next-hint', role: 'status', 'aria-live': 'polite' });
+  let left = 5;
+  const paintHint = () => {
+    hint.textContent = left > 0
+      ? t(isFinal ? 'spiel.result.finalIn' : 'spiel.result.nextIn', { n: left })
+      : t(isFinal ? 'spiel.result.finalNow' : 'spiel.result.nextNow');
+  };
+  paintHint();
+  const iv = setInterval(() => {
+    if (!hint.isConnected) { clearInterval(iv); return; }
+    left -= 1;
+    paintHint();
+    if (left <= 0) clearInterval(iv);
+  }, 1000);
+
   app.innerHTML = '';
   app.append(el('div', { class: 'wrap phase-screen' },
     el('h1', {}, `${t('spiel.result.title')} · ${msg.round}/${msg.rounds}`),
     el('div', { class: 'card' }, rows),
+    hint,
   ));
+  window.scrollTo(0, 0);
 }
 
 function doFinal(msg) {
@@ -576,6 +844,16 @@ function doFinal(msg) {
       }),
     ),
   ) : null;
+
+  // Zurück zur Startseite/Lobby und den Raum sauber schließen.
+  function replay() {
+    lanState.room?.close();
+    lanState.room = null;
+    window.__mmInGame = false;
+    if (location.hash === '#/spiel') window.dispatchEvent(new CustomEvent('mm:goto', { detail: '#/spiel' }));
+    else location.hash = '#/spiel';
+  }
+
   app.innerHTML = '';
   app.append(el('div', { class: 'wrap phase-screen' },
     el('h1', {}, '👑 ' + t('spiel.final.title')),
@@ -590,10 +868,11 @@ function doFinal(msg) {
       ),
     ),
     bestCard,
-    el('div', { style: 'display:flex;gap:10px;justify-content:center;margin-top:14px' },
-      el('button', { class: 'btn', onclick: () => { location.hash = '#/'; } }, '🏠 ' + t('spiel.final.home')),
+    el('div', { class: 'final-actions' },
+      el('button', { class: 'btn btn-primary', type: 'button', onclick: replay }, '🔁 ' + t('spiel.final.again')),
     ),
   ));
+  window.scrollTo(0, 0);
 }
 
 // Host-Seite (wird von der Lobby-Closure aufgerufen)
@@ -606,14 +885,15 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
   lanState.collecting = false;
   lanState.voting = false;
   const playerList = [...playersMap.entries()].map(([id, name]) => ({ id, name }));
-  if (playerList.length < 2) { toast('Mindestens 2 Spieler:innen nötig'); return; }
+  if (playerList.length < 2) { toast(t('spiel.lobby.needPlayers')); return; }
   lanState.players = playerList;
 
   async function runRound(r) {
     lanState.round = r;
     lanState.memes = [];
     lanState.votes = [];
-    const theme = cfg.mode === 'theme' ? THEMES[(r * 7) % THEMES.length] : null;
+    const themes = themesForLang();
+    const theme = cfg.mode === 'theme' ? themes[(r * 7) % themes.length] : null;
     lanState.theme = theme;
     let tplKeys;
     try { tplKeys = await pickTemplates(playerList.length, cfg.mode, playerList.map((p) => p.id), cfg.ownPacks ? lanState.ownPacks : null); } catch (e) { toast(e.message); return; }

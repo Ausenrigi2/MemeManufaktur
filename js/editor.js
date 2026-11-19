@@ -91,6 +91,24 @@ export class MemeCanvas {
     this._emitChange();
   }
 
+  duplicateLayer(id) {
+    const src = this.layers.find((l) => l.id === id);
+    if (!src) return null;
+    const { _box, ...rest } = src;
+    const offset = Math.max(10, Math.round(Math.min(this.cw, this.ch) * 0.025));
+    const copy = {
+      ...rest,
+      id: uid('ly'),
+      x: Math.max(10, Math.min(this.cw - 10, src.x + offset)),
+      y: Math.max(10, Math.min(this.ch - 10, src.y + offset)),
+    };
+    this.layers.splice(this.layers.indexOf(src) + 1, 0, copy);
+    this.selectedId = copy.id;
+    this.render();
+    this._emitChange();
+    return copy;
+  }
+
   reorderLayer(id, dir) {
     const i = this.layers.findIndex((l) => l.id === id);
     const j = i + dir;
@@ -143,13 +161,14 @@ export class MemeCanvas {
     const widths = lines.map((ln) => { const w = ctx.measureText(ln).width; minW = Math.max(minW, w); return w; });
     let minX = Infinity, maxX = -Infinity;
     const pad = fs * 0.14;
+    const xOffset = l.x - this.cw / 2;
 
     for (let i = 0; i < lines.length; i++) {
       const cy = topY + i * lineHeight + lineHeight / 2;
       let cx;
-      if (l.align === 'left') cx = this.cw * 0.04 + widths[i] / 2;
-      else if (l.align === 'right') cx = this.cw * 0.96 - widths[i] / 2;
-      else cx = this.cw / 2;
+      if (l.align === 'left') cx = this.cw * 0.04 + widths[i] / 2 + xOffset;
+      else if (l.align === 'right') cx = this.cw * 0.96 - widths[i] / 2 + xOffset;
+      else cx = l.x;
 
       if (l.highlight) {
         ctx.fillStyle = l.highlightColor;

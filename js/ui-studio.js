@@ -1,9 +1,21 @@
 // ============ Studio-Seite ============
-import { el, t, toast, rand, applyI18n } from './lib.js';
+import { el, t, toast, rand } from './lib.js';
 import { MemeCanvas, FONTS } from './editor.js';
 import { Packs, ServerAPI } from './packs.js';
 
+function ensureStudioStyles() {
+  if (document.querySelector('link[data-studio-css]')) return;
+  document.head.append(el('link', { rel: 'stylesheet', href: 'css/studio.css', 'data-studio-css': '' }));
+}
+
+if (location.hash.startsWith('#/studio')) ensureStudioStyles();
+
+let currentStudioCleanup = null;
+
 export function openStudio(params = {}) {
+  currentStudioCleanup?.();
+  ensureStudioStyles();
+
   const app = document.getElementById('app');
   app.innerHTML = '';
 
@@ -12,11 +24,81 @@ export function openStudio(params = {}) {
   mc.bindPointer();
   mc.onChange = () => syncPanelFromLayer();
 
-  // ---------- Template-Balken ----------
-  const tplSelect = el('select', { id: 'tpl-select', 'aria-label': t('studio.tpl') });
-  const randomBtn = el('button', { class: 'btn btn-sm', type: 'button', onclick: () => pickRandom() }, t('studio.random'), ' 🎲');
-  const fileInput = el('input', { type: 'file', accept: 'image/*', hidden: true, multiple: false });
-  const uploadBtn = el('button', { class: 'btn btn-sm', type: 'button', onclick: () => fileInput.click() }, t('studio.upload'));
+  let activeTplId = null;
+  let thumbUrls = [];
+
+  function revokeThumbs() {
+    for (const url of thumbUrls) URL.revokeObjectURL(url);
+    thumbUrls = [];
+  }
+
+  // ---------- Galerie + Template-Auswahl ----------
+  const tplSelect = el('select', { id: 'tpl-select', 'aria-label': t('studio.gallery') });
+  const galleryGroups = el('div', { class: 'gallery-groups' });
+  const randomBtn = el('button', { class: 'btn tpl-action', type: 'button', onclick: () => pickRandom() },
+    el('span', { class: 'tpl-ico', 'aria-hidden': 'true' }, '🎲'),
+    el('span', { class: 'tpl-name' }, t('studio.random')),
+  );
+  const fileInput = el('input', { type: 'file', accept: 'image/*', hidden: true });
+  const uploadBtn = el('button', { class: 'btn tpl-action upload', type: 'button', onclick: () => fileInput.click() },
+    el('span', { class: 'tpl-ico', 'aria-hidden': 'true' }, '⬆️'),
+    el('span', { class: 'tpl-name' }, t('studio.upload')),
+  );
+
+  function makeGalleryGroup(title, tiles) {
+    return el('section', { class: 'gallery-group' },
+      el('h3', {}, el('span', {}, title), el('span', { class: 'gallery-count' }, String(tiles.length))),
+      el('div', { class: 'gallery-grid' }, ...tiles),
+    );
+  }
+
+  function makeLocalTile(tpl) {
+    let url = null;
+    if (tpl.blob) {
+      try { url = URL.createObjectURL(tpl.blob); thumbUrls.push(url); } catch { /* defekter Blob – Kachel bleibt ohne Bild */ }
+    }
+    return el('button', {
+      class: 'tpl-tile', type: 'button', 'data-tpl': tpl.id, 'aria-pressed': 'false',
+      title: tpl.name, onclick: () => loadTemplate(tpl.id),
+    },
+      url ? el('img', { src: url, alt: '', loading: 'lazy', draggable: 'false' }) : null,
+      el('span', { class: 'tpl-name' }, tpl.name),
+    );
+  }
+
+  function makeServerTile(s) {
+    return el('button', {
+      class: 'tpl-tile', type: 'button', 'data-tpl': `srv:${s.id}`, 'aria-pressed': 'false',
+      title: s.name, onclick: () => loadTemplate(`srv:${s.id}`),
+    },
+      el('img', { src: ServerAPI.url(s.id), alt: '', loading: 'lazy', draggable: 'false' }),
+      el('span', { class: 'tpl-name' }, s.name),
+    );
+  }
+
+  const galleryCard = el('section', { class: 'card tpl-gallery', 'aria-label': t('studio.gallery') },
+    el('div', { class: 'gallery-head' }, el('h2', {}, '🖼️ ' + t('studio.gallery'))),
+    el('div', { class: 'gallery-scroll' },
+      el('section', { class: 'gallery-group gallery-quick' },
+        el('h3', {}, t('studio.quickStart')),
+        el('div', { class: 'gallery-grid gallery-grid-quick' }, randomBtn, uploadBtn),
+      ),
+      galleryGroups,
+    ),
+    fileInput,
+  );
+
+  const fallbackBar = el('div', { class: 'tpl-bar tpl-fallback' },
+    el('span', { class: 'tpl-fallback-label' }, t('studio.tpl')),
+    tplSelect,
+  );
+
+  function markActiveTemplate(id) {
+    activeTplId = id || null;
+    galleryGroups.querySelectorAll('.tpl-tile[data-tpl]').forEach((node) => {
+      node.setAttribute('aria-pressed', String(node.dataset.tpl === activeTplId));
+    });
+  }
 
   async function refreshTemplates() {
     if (ServerAPI.available) {
@@ -24,37 +106,62 @@ export function openStudio(params = {}) {
     }
     const packs = await Packs.allPacks();
     const all = await Packs.allTemplates();
+    const byId = new Map(all.map((tpl) => [tpl.id, tpl]));
+
+    revokeThumbs();
     tplSelect.innerHTML = '';
+    tplSelect.append(el('option', { value: '', disabled: true }, t('studio.customImage')));
+    galleryGroups.innerHTML = '';
+    let groups = 0;
+
     for (const p of packs) {
+      const tpls = p.tplIds.map((id) => byId.get(id)).filter(Boolean);
+      if (!tpls.length) continue;
       const group = el('optgroup', { label: p.name });
-      const tpls = p.tplIds.map((id) => all.find((x) => x.id === id)).filter(Boolean);
-      for (const tpl of tpls) group.append(el('option', { value: tpl.id }, `${tpl.name}`));
+      for (const tpl of tpls) group.append(el('option', { value: tpl.id }, tpl.name));
       tplSelect.append(group);
+      galleryGroups.append(makeGalleryGroup(p.name, tpls.map(makeLocalTile)));
+      groups++;
     }
+
     if (ServerAPI.available && window.__serverTpls?.length) {
       const group = el('optgroup', { label: t('pakete.serverTitle') });
       for (const s of window.__serverTpls) group.append(el('option', { value: `srv:${s.id}` }, s.name));
       tplSelect.append(group);
+      galleryGroups.append(makeGalleryGroup(t('pakete.serverTitle'), window.__serverTpls.map(makeServerTile)));
+      groups++;
     }
+
+    if (!groups) galleryGroups.append(el('p', { class: 'gallery-empty' }, t('studio.galleryEmpty')));
+    markActiveTemplate(activeTplId);
   }
 
   async function loadTemplate(id) {
+    if (!id) return false;
     try {
       let blob; let name = id;
       if (id.startsWith('srv:')) {
         const sid = id.slice(4);
         const res = await fetch(ServerAPI.url(sid));
+        if (!res.ok) throw new Error(`Template ${res.status}`);
         blob = await res.blob();
+        name = window.__serverTpls?.find((s) => String(s.id) === sid)?.name || sid;
       } else {
         const tpl = await Packs.getTemplate(id);
-        if (!tpl) return;
+        if (!tpl) return false;
         blob = tpl.blob; name = tpl.name;
       }
       await mc.setImage(blob, name);
+      resetImageControls();
       resetDefaultLayers();
       if ([...tplSelect.options].some((o) => o.value === id)) tplSelect.value = id;
-      toast(t('studio.saved'));
-    } catch (e) { console.error(e); toast('⚠️ ' + e.message); }
+      markActiveTemplate(id);
+      return true;
+    } catch (e) {
+      console.error(e);
+      toast('⚠️ ' + e.message);
+      return false;
+    }
   }
 
   function resetDefaultLayers() {
@@ -66,39 +173,57 @@ export function openStudio(params = {}) {
     syncPanelFromLayer();
   }
 
+  async function useLocalImage(file) {
+    await mc.setImage(file, file.name);
+    resetImageControls();
+    resetDefaultLayers();
+    tplSelect.value = '';
+    markActiveTemplate(null);
+  }
+
   async function pickRandom() {
-    const all = (await Packs.allTemplates()).filter((x) => !x.builtin || true);
-    if (!all.length) return;
-    const tpl = rand(all);
-    await loadTemplate(tpl.id);
+    const ids = (await Packs.allTemplates()).map((tpl) => tpl.id);
+    if (ServerAPI.available && window.__serverTpls?.length) {
+      ids.push(...window.__serverTpls.map((s) => `srv:${s.id}`));
+    }
+    if (!ids.length) return;
+    await loadTemplate(rand(ids));
   }
 
   fileInput.addEventListener('change', async () => {
     const f = fileInput.files[0];
     if (!f) return;
-    await mc.setImage(f, f.name);
-    resetDefaultLayers();
+    await useLocalImage(f);
     fileInput.value = '';
   });
 
   // ---------- Ebenen-Liste ----------
   const layerList = el('ul', { class: 'layer-list' });
-  const addLayerBtn = el('button', { class: 'btn btn-sm', type: 'button', onclick: () => { mc.addLayer({ text: '', x: mc.cw / 2, y: mc.ch / 2 }); refreshLayerList(); } }, '+ ' + t('studio.addLayer'));
+  const addLayerBtn = el('button', {
+    class: 'btn btn-sm', type: 'button',
+    onclick: () => mc.addLayer({ text: '', x: mc.cw / 2, y: mc.ch / 2 }),
+  }, '+ ' + t('studio.addLayer'));
 
   function refreshLayerList() {
     layerList.innerHTML = '';
     if (!mc.layers.length) { layerList.append(el('li', { class: 'txt', style: 'color:var(--muted)' }, t('studio.noLayers'))); return; }
     for (const l of [...mc.layers].reverse()) {
       const label = (l.text || '…').slice(0, 22);
+      const selectLayer = () => mc.select(l.id);
       const item = el('li', {
         class: `layer-item${l.id === mc.selectedId ? ' selected' : ''}`,
-        onclick: () => { mc.select(l.id); refreshLayerList(); syncPanelFromLayer(); },
+        role: 'button', tabindex: 0, 'aria-label': label,
+        onclick: selectLayer,
+        onkeydown: (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectLayer(); }
+        },
       },
-        el('span', {}, '▣'),
+        el('span', { 'aria-hidden': 'true' }, '▣'),
         el('span', { class: 'txt' }, label),
-        el('button', { class: 'btn btn-icon btn-sm', title: '↑', onclick: (e) => { e.stopPropagation(); mc.reorderLayer(l.id, -1); refreshLayerList(); } }, '↑'),
-        el('button', { class: 'btn btn-icon btn-sm', title: '↓', onclick: (e) => { e.stopPropagation(); mc.reorderLayer(l.id, 1); refreshLayerList(); } }, '↓'),
-        el('button', { class: 'btn btn-icon btn-sm', title: 'Löschen', onclick: (e) => { e.stopPropagation(); mc.removeLayer(l.id); refreshLayerList(); } }, '✕'),
+        el('button', { class: 'btn btn-icon btn-sm', type: 'button', title: t('studio.moveUp'), 'aria-label': t('studio.moveUp'), onclick: (e) => { e.stopPropagation(); mc.reorderLayer(l.id, -1); } }, '↑'),
+        el('button', { class: 'btn btn-icon btn-sm', type: 'button', title: t('studio.moveDown'), 'aria-label': t('studio.moveDown'), onclick: (e) => { e.stopPropagation(); mc.reorderLayer(l.id, 1); } }, '↓'),
+        el('button', { class: 'btn btn-icon btn-sm', type: 'button', title: t('studio.duplicate'), 'aria-label': t('studio.duplicate'), onclick: (e) => { e.stopPropagation(); mc.duplicateLayer(l.id); } }, '⧉'),
+        el('button', { class: 'btn btn-icon btn-sm', type: 'button', title: t('studio.deleteLayer'), 'aria-label': t('studio.deleteLayer'), onclick: (e) => { e.stopPropagation(); mc.removeLayer(l.id); } }, '✕'),
       );
       layerList.append(item);
     }
@@ -138,7 +263,6 @@ export function openStudio(params = {}) {
   autoFitBtn.addEventListener('click', () => {
     const l = mc.selected();
     if (!l) return;
-    let fs = l.fontSize;
     // Einfacher Auto-Fit: so groß wie möglich bei ≤ 6 Zeilen
     const target = Math.round(Math.min(mc.cw, mc.ch) * 0.35);
     let lo = 10, hi = target, best = 10;
@@ -159,7 +283,6 @@ export function openStudio(params = {}) {
       const mid = (lo + hi) >> 1;
       if (test(mid) <= 6) { best = mid; lo = mid + 1; } else hi = mid - 1;
     }
-    void fs;
     mc.updateLayer(l.id, { fontSize: best });
   });
 
@@ -182,20 +305,34 @@ export function openStudio(params = {}) {
     upperCheck.checked = l.uppercase;
   }
 
-  // ---------- Bild-Panel ----------
-  const zoomRange = el('input', { type: 'range', min: 100, max: 250, value: 100 });
+  // ---------- Bild-Panel + Bühnen-Toolbar ----------
+  const zoomRange = el('input', { type: 'range', min: 100, max: 250, value: 100, id: 'studio-zoom', 'aria-label': t('studio.zoom') });
+  const zoomValue = el('output', { class: 'stage-zoom-val', for: 'studio-zoom' }, '100%');
   const brightRange = el('input', { type: 'range', min: 40, max: 200, value: 100 });
   const contrastRange = el('input', { type: 'range', min: 40, max: 200, value: 100 });
   const satRange = el('input', { type: 'range', min: 0, max: 250, value: 100 });
-  const flipBtn = el('button', { class: 'btn btn-sm', type: 'button' }, '⇋ ' + t('studio.flip'));
+  const flipBtn = el('button', { class: 'btn btn-sm', type: 'button', 'aria-pressed': 'false' }, '⇋ ' + t('studio.flip'));
   const rotBtn = el('button', { class: 'btn btn-sm', type: 'button' }, '⟳ ' + t('studio.rotate'));
   const resetBtn = el('button', { class: 'btn btn-sm', type: 'button' }, '↺ ' + t('studio.reset'));
 
-  zoomRange.addEventListener('input', () => { mc.zoom = zoomRange.value / 100; mc.render(); });
+  zoomRange.addEventListener('input', () => {
+    mc.zoom = zoomRange.value / 100;
+    zoomValue.textContent = `${zoomRange.value}%`;
+    mc.render();
+  });
   brightRange.addEventListener('input', () => { mc.filters.brightness = Number(brightRange.value); mc.render(); });
   contrastRange.addEventListener('input', () => { mc.filters.contrast = Number(contrastRange.value); mc.render(); });
   satRange.addEventListener('input', () => { mc.filters.saturate = Number(satRange.value); mc.render(); });
-  flipBtn.addEventListener('click', () => { mc.flip = !mc.flip; mc.render(); });
+  function resetImageControls() {
+    zoomRange.value = 100; zoomValue.textContent = '100%';
+    brightRange.value = 100; contrastRange.value = 100; satRange.value = 100;
+    flipBtn.setAttribute('aria-pressed', 'false');
+  }
+  flipBtn.addEventListener('click', () => {
+    mc.flip = !mc.flip;
+    flipBtn.setAttribute('aria-pressed', String(mc.flip));
+    mc.render();
+  });
   rotBtn.addEventListener('click', () => {
     mc.rot = (mc.rot + 1) % 4;
     mc._recomputeSize();
@@ -205,9 +342,20 @@ export function openStudio(params = {}) {
   resetBtn.addEventListener('click', () => {
     mc.zoom = 1; mc.flip = false; mc.rot = 0;
     mc.filters = { brightness: 100, contrast: 100, saturate: 100 };
-    zoomRange.value = 100; brightRange.value = 100; contrastRange.value = 100; satRange.value = 100;
+    zoomRange.value = 100; zoomValue.textContent = '100%';
+    brightRange.value = 100; contrastRange.value = 100; satRange.value = 100;
+    flipBtn.setAttribute('aria-pressed', 'false');
     mc._recomputeSize(); mc.render();
   });
+
+  const stageToolbar = el('div', { class: 'stage-toolbar', role: 'toolbar', 'aria-label': t('studio.toolbar') },
+    el('label', { class: 'stage-zoom' },
+      el('span', { 'aria-hidden': 'true' }, '🔍'),
+      zoomRange,
+      zoomValue,
+    ),
+    el('div', { class: 'stage-tool-btns' }, flipBtn, rotBtn, resetBtn),
+  );
 
   // ---------- Export ----------
   const fmtSelect = el('select');
@@ -231,17 +379,65 @@ export function openStudio(params = {}) {
     } catch { toast('Kopieren nicht möglich – nutze „Herunterladen“'); }
   });
 
+  // ---------- Tastatur ----------
+  function isTyping(target) {
+    const tag = target?.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!target?.isContentEditable;
+  }
+
+  function onKey(e) {
+    if (e.defaultPrevented || isTyping(e.target)) return;
+    const layer = mc.selected();
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.altKey && (e.key === 'd' || e.key === 'D')) {
+      if (!layer) return;
+      e.preventDefault();
+      mc.duplicateLayer(layer.id);
+      return;
+    }
+    if (mod || e.altKey) return;
+    if ((e.key === 'Delete' || e.key === 'Backspace') && layer) {
+      e.preventDefault();
+      mc.removeLayer(layer.id);
+      return;
+    }
+    if (!layer) return;
+    const step = e.shiftKey ? 10 : 1;
+    const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+    const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+    if (!dx && !dy) return;
+    e.preventDefault();
+    mc.updateLayer(layer.id, {
+      x: Math.max(10, Math.min(mc.cw - 10, layer.x + dx)),
+      y: Math.max(10, Math.min(mc.ch - 10, layer.y + dy)),
+    });
+  }
+
+  const abort = new AbortController();
+  document.addEventListener('keydown', onKey, { signal: abort.signal });
+  function cleanup() {
+    abort.abort();
+    revokeThumbs();
+    if (currentStudioCleanup === cleanup) currentStudioCleanup = null;
+  }
+  currentStudioCleanup = cleanup;
+  window.addEventListener('hashchange', cleanup, { once: true, signal: abort.signal });
+
   // ---------- Layout zusammensetzen ----------
   app.append(
-    el('div', { class: 'wrap' },
+    el('div', { class: 'wrap studio-page' },
       el('h1', {}, t('studio.title')),
-      el('div', { class: 'tpl-bar' },
-        tplSelect, randomBtn, uploadBtn, fileInput,
-      ),
+      galleryCard,
+      fallbackBar,
       el('div', { class: 'studio-grid' },
-        el('div', { class: 'card panel' },
+        el('div', { class: 'stage-wrap' },
+          el('div', { class: 'stage' }, canvas, el('div', { class: 'stage-hint' }, t('studio.hint'))),
+          stageToolbar,
+        ),
+        el('div', { class: 'card panel studio-panel' },
           el('h3', {}, t('studio.layers'), addLayerBtn),
           layerList,
+          el('p', { class: 'studio-keys' }, t('studio.keys')),
           el('h3', {}, t('studio.text')),
           el('label', {}, t('studio.content')), txtInput,
           el('div', { class: 'fieldrow', style: 'margin-top:12px' },
@@ -263,20 +459,15 @@ export function openStudio(params = {}) {
           ),
           el('div', { style: 'display:flex;gap:8px' }, autoFitBtn),
           el('h3', {}, t('studio.image')),
-          el('div', { class: 'fieldrow' }, el('div', {}, el('label', {}, t('studio.zoom')), zoomRange)),
           el('div', { class: 'fieldrow' }, el('div', {}, el('label', {}, t('studio.bright')), brightRange)),
           el('div', { class: 'fieldrow' }, el('div', {}, el('label', {}, t('studio.contrast')), contrastRange)),
           el('div', { class: 'fieldrow' }, el('div', {}, el('label', {}, t('studio.saturate')), satRange)),
-          el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, flipBtn, rotBtn, resetBtn),
           el('h3', {}, t('studio.export')),
           el('div', { class: 'fieldrow' },
             el('div', { class: 'grow' }, el('label', {}, t('studio.format')), fmtSelect),
             el('div', {}, el('label', {}, t('studio.quality')), qRange),
           ),
           el('div', { style: 'display:flex;gap:10px;flex-wrap:wrap;margin-top:6px' }, dlBtn, cpBtn),
-        ),
-        el('div', { class: 'stage-wrap' },
-          el('div', { class: 'stage' }, canvas, el('div', { class: 'stage-hint' }, t('studio.hint'))),
         ),
       ),
     ),
@@ -288,23 +479,22 @@ export function openStudio(params = {}) {
   stageEl.addEventListener('drop', async (e) => {
     e.preventDefault();
     const f = e.dataTransfer.files?.[0];
-    if (f && f.type.startsWith('image/')) { await mc.setImage(f, f.name); resetDefaultLayers(); }
+    if (f && f.type.startsWith('image/')) await useLocalImage(f);
   });
 
   // Init
   (async () => {
     await refreshTemplates();
-    let initial = params.template || tplSelect.value || null;
-    if (!initial && ServerAPI.available) {
-      const srv = window.__serverTpls?.[0];
-      if (srv) initial = `srv:${srv.id}`;
+    let initial = params.template || null;
+    if (!initial && ServerAPI.available && window.__serverTpls?.length) {
+      initial = `srv:${window.__serverTpls[0].id}`;
     }
-    if (initial) await loadTemplate(initial);
-    else {
+    if (!initial) initial = [...tplSelect.options].find((o) => o.value)?.value || null;
+    if (!initial || !(await loadTemplate(initial))) {
       // Leere Leinwand als Fallback
       await mc.setImage(new Blob(['<svg xmlns="http://www.w3.org/2000/svg" width="640" height="640"><rect width="640" height="640" fill="#FFC93C"/></svg>'], { type: 'image/svg+xml' }));
       resetDefaultLayers();
     }
-    tplSelect.addEventListener('change', () => loadTemplate(tplSelect.value));
+    tplSelect.addEventListener('change', () => { if (tplSelect.value) loadTemplate(tplSelect.value); });
   })();
 }

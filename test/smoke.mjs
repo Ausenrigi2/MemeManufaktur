@@ -29,6 +29,7 @@ after(async () => {
 // 1×1-Pixel-PNG
 const PNG1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 const PNG_BYTES = Buffer.from(PNG1, 'base64').length;
+const GIF1 = 'R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
 const apiPost = (path, obj, cookie) => fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(cookie ? { cookie } : {}) }, body: JSON.stringify(obj) });
 const post = (obj, cookie) => apiPost('/api/upload', obj, cookie);
 
@@ -43,6 +44,51 @@ test('GET / servt index.html', async () => {
   assert.equal(res.status, 200);
   assert.match(res.headers.get('content-type'), /text\/html/);
   assert.match(await res.text(), /MemeManufaktur/);
+});
+
+test('statische Dateien liefern ETag und antworten mit 304', async () => {
+  const first = await fetch(base + '/');
+  const etag = first.headers.get('etag');
+  assert.ok(etag, 'ETag fehlt');
+  const again = await fetch(base + '/', { headers: { 'If-None-Match': etag } });
+  assert.equal(again.status, 304);
+});
+
+test('Web-App-Manifest wird mit korrektem MIME-Typ serviert', async () => {
+  const res = await fetch(base + '/manifest.webmanifest');
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /application\/manifest\+json/);
+});
+
+test('Datenverzeichnis, Quellcode und Tests sind nicht statisch erreichbar', async () => {
+  for (const p of ['/data/users.json', '/data/library.json', '/data/uploads/', '/server.js', '/package.json', '/.git/config', '/test/smoke.mjs']) {
+    assert.equal((await fetch(base + p)).status, 404, `${p} darf nicht ausgeliefert werden`);
+  }
+});
+
+test('SVG-Uploads werden abgelehnt (kein Skript im App-Origin)', async () => {
+  const id = 'smoke_svg_' + Math.random().toString(36).slice(2, 8);
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>').toString('base64');
+  const res = await post({ id, name: 'XSS', mime: 'image/svg+xml', data: svg });
+  assert.equal(res.status, 400);
+  assert.equal((await fetch(base + `/uploads/${id}`)).status, 404);
+});
+
+test('anonyme Uploads dürfen bestehende Einträge nicht überschreiben', async () => {
+  const id = 'smoke_anon_' + Math.random().toString(36).slice(2, 8);
+  assert.equal((await post({ id, data: PNG1 })).status, 200);
+  assert.equal((await post({ id, data: PNG1 })).status, 403);
+});
+
+test('Overwrite mit anderer Endung räumt die alte Datei auf', async () => {
+  const id = 'smoke_ext_' + Math.random().toString(36).slice(2, 8);
+  const u = await auth('/api/register', { email: `ext-${Date.now()}@test.dev`, password: 'geheim123' });
+  assert.equal((await post({ id, data: PNG1 }, u.cookie)).status, 200);
+  assert.equal((await post({ id, data: GIF1 }, u.cookie)).status, 200);
+  const img = await fetch(base + `/uploads/${id}`, { headers: { cookie: u.cookie } });
+  assert.equal(img.status, 200);
+  assert.match(img.headers.get('content-type'), /image\/gif/);
+  assert.equal((await fetch(base + `/uploads/${id}.png`)).status, 404);
 });
 
 test('Upload-Roundtrip: Datei + Bibliothekseintrag + korrekt servter Type', async () => {
@@ -122,6 +168,8 @@ test('Private Entries: nur für den Eigentümer sichtbar', async () => {
   assert.ok(!anon.some((x) => x.id === id), 'privater Eintrag für Anonymous sichtbar');
   assert.equal((await getAs(`/uploads/${id}`, a.cookie)).status, 200);
   assert.equal((await getAs(`/uploads/${id}`)).status, 401); // privat braucht Session
+  const b = await auth('/api/register', { email: `bob-private-${Date.now()}@test.dev`, password: 'geheim123' });
+  assert.equal((await apiPost('/api/vote', { id }, b.cookie)).status, 404, 'fremde private Einträge sind nicht votebar');
 });
 
 test('Quota: zweite Upload über Grenze -> 413', async () => {
@@ -142,6 +190,18 @@ test('Voting: Konto nötig, Toggle pro Account, Sortierung nach Stimmen', async 
   assert.equal(list[0].id, id, 'meistgestimmter Entry muss oben stehen');
   const v2 = await apiPost('/api/vote', { id }, c.cookie);
   assert.equal((await v2.json()).votes, 0); // nochmal treffen = entvotescht
+});
+
+test('parallele Votes gehen nicht verloren', async () => {
+  const id = 'smoke_par_' + Math.random().toString(36).slice(2, 8);
+  await post({ id, data: PNG1 }); // geteilter Eintrag
+  const stamp = Date.now();
+  const users = await Promise.all([0, 1, 2, 3].map((i) =>
+    auth('/api/register', { email: `par-${stamp}-${i}@test.dev`, password: 'geheim123' })));
+  const results = await Promise.all(users.map((u) => apiPost('/api/vote', { id }, u.cookie)));
+  results.forEach((r) => assert.equal(r.status, 200));
+  const list = await (await getAs('/api/library')).json();
+  assert.equal(list.find((x) => x.id === id).votes.length, 4, 'parallele Votes verloren');
 });
 
 test('Lobbys: nur öffentliche werden gelistet, leere fallen raus', async () => {

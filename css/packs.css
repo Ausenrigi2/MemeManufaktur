@@ -1,0 +1,238 @@
+/* ============ Pakete-Seite ============
+   Eigene Datei, damit styles.css unangetastet bleibt.
+   Tokens kommen aus :root in styles.css. */
+
+/* ---------- Suche + Zähler ---------- */
+.packs-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 22px 0 18px;
+}
+
+.packs-search {
+  position: relative;
+  flex: 1 1 320px;
+  min-width: 220px;
+}
+
+.packs-search::before {
+  content: '🔍';
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.95rem;
+  pointer-events: none;
+}
+
+.packs-search-input {
+  width: 100%;
+  font: 700 1rem var(--font-body);
+  color: var(--ink);
+  background: var(--card);
+  border: var(--border);
+  border-radius: 999px;
+  padding: 11px 18px 11px 42px;
+  box-shadow: var(--shadow-sm);
+}
+
+.packs-search-input::placeholder {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.packs-count {
+  margin: 0;
+  font-weight: 800;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+/* ---------- Text, Empty States, Upload ---------- */
+.packs-lead,
+.packs-sub {
+  color: var(--muted);
+  max-width: 70ch;
+}
+
+.packs-sub {
+  margin-bottom: 14px;
+}
+
+.packs-empty {
+  grid-column: 1 / -1;
+  border: 3px dashed var(--ink);
+  border-radius: var(--radius);
+  background: var(--input);
+  padding: 24px;
+  text-align: center;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.packs-upload {
+  margin-bottom: 8px;
+}
+
+.packs-shared {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.packs-shared input:disabled + span {
+  color: var(--muted);
+}
+
+.dropzone[aria-busy="true"] {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.dropzone[aria-busy="true"]::after {
+  content: '⏳';
+  margin-left: 8px;
+}
+
+.pack-count {
+  font-weight: 700;
+  color: var(--muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+/* ---------- Server-Bestand ---------- */
+.server-section {
+  padding-top: 30px;
+}
+
+.server-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.server-head h2 {
+  margin-bottom: 4px;
+}
+
+.server-count {
+  font-weight: 800;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.server-tpl {
+  display: flex;
+  flex-direction: column;
+}
+
+.server-open {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.server-open img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.12s ease;
+}
+
+.server-open:hover img {
+  transform: scale(1.03);
+}
+
+.server-meta {
+  padding: 8px 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.server-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.server-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.server-del {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.server-del:hover {
+  background: var(--red);
+  color: #fff;
+}
+
+.packs-more {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  margin-top: 18px;
+}
+
+.packs-more small {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 700px) {
+  .packs-toolbar {
+    gap: 10px;
+    margin-top: 16px;
+  }
+
+  .packs-search {
+    flex-basis: 100%;
+  }
+
+  .packs-count {
+    font-size: 0.85rem;
+  }
+}
+
+@media (max-width: 620px) {
+  .pack-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    padding: 18px 0;
+  }
+
+  .server-list {
+    grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+    gap: 10px;
+  }
+
+  .packs-empty {
+    padding: 18px;
+  }
+}
