@@ -5,6 +5,7 @@
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import fssync from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -60,7 +61,7 @@ const SECURITY_HEADERS = {
 
 function json(res, status, obj, extraHeaders = {}) {
   const body = JSON.stringify(obj);
-  res.writeHead(status, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body), ...extraHeaders });
+  res.writeHead(status, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body), 'Cache-Control': 'no-store', ...extraHeaders });
   res.end(body);
 }
 function notFound(res) { json(res, 404, { error: 'not found' }); }
@@ -140,6 +141,15 @@ function cookieToken(req) {
   const m = String(req.headers.cookie || '').match(/(?:^|;\s*)mm_sid=([0-9a-f]{48})/);
   return m ? m[1] : null;
 }
+// Anonyme Uploads gehören dem Browser, der sie hochgeladen hat – ohne Konto.
+function cookieAnon(req) {
+  const m = String(req.headers.cookie || '').match(/(?:^|;\s*)mm_anon=([0-9a-f]{32})/);
+  return m ? m[1] : null;
+}
+function anonCookie(req, token) {
+  const secure = req.socket?.encrypted || req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+  return `mm_anon=${token}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax${secure}`;
+}
 async function currentUser(req) {
   const token = cookieToken(req);
   const session = token && sessions.get(token);
@@ -148,10 +158,11 @@ async function currentUser(req) {
   return (await readJson(USERS_FILE)).find((u) => u.id === session.userId) || null;
 }
 const publicUser = (u) => ({ id: u.id, email: u.email });
-function startSession(res, user) {
+function startSession(req, res, user) {
   const token = crypto.randomBytes(24).toString('hex');
   sessions.set(token, { userId: user.id, expires: Date.now() + SESSION_TTL_MS });
-  return `mm_sid=${token}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax`;
+  const secure = req.socket?.encrypted || req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+  return `mm_sid=${token}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax${secure}`;
 }
 
 async function readAuthBody(req) {
@@ -176,7 +187,7 @@ async function handleRegister(req, res) {
     return list;
   });
   if (!inserted) return json(res, 409, { error: 'email already registered' });
-  return json(res, 200, { user: publicUser(user) }, { 'Set-Cookie': startSession(res, user) });
+  return json(res, 200, { user: publicUser(user) }, { 'Set-Cookie': startSession(req, res, user) });
 }
 
 async function handleLogin(req, res) {
@@ -191,7 +202,7 @@ async function handleLogin(req, res) {
     return json(res, 401, { error: 'wrong email or password' });
   }
   if (!(await verifyPassword(pw, user.pw))) return json(res, 401, { error: 'wrong email or password' });
-  return json(res, 200, { user: publicUser(user) }, { 'Set-Cookie': startSession(res, user) });
+  return json(res, 200, { user: publicUser(user) }, { 'Set-Cookie': startSession(req, res, user) });
 }
 
 async function handleLogout(req, res) {
@@ -235,7 +246,17 @@ async function handleUpload(req, res) {
   const declared = Number(req.headers['content-length'] || 0);
   if (declared > MAX_BODY_BYTES) return json(res, 413, { error: 'file too large' });
   const user = await currentUser(req);
-  const raw = await readBody(req, MAX_BODY_BYTES);
+  let anon = cookieAnon(req);
+  let anonHeader = null;
+  if (!user && !anon) {
+    anon = crypto.randomBytes(16).toString('hex');
+    anonHeader = anonCookie(req, anon);
+  }
+  const raw = await readBody(req, MAX_BODY_BYTES).catch((e) => e);
+  if (raw instanceof Error) {
+    if (raw.message === 'body too large') return json(res, 413, { error: 'file too large' });
+    return json(res, 400, { error: 'invalid body' });
+  }
   let body;
   try { body = JSON.parse(raw.toString('utf8')); } catch { return json(res, 400, { error: 'invalid json' }); }
   if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: 'invalid body' });
@@ -281,14 +302,14 @@ async function handleUpload(req, res) {
     if (f.startsWith(`${id}.`) && f !== `${id}.${ext}`) await fs.unlink(path.join(UPLOADS_DIR, f)).catch(() => {});
   }
 
-  const entry = { id, name, mime: safeMime, ext, size: buf.length, createdAt: Date.now(), owner: willOwn ? user.id : (existing?.owner || null), votes: existing?.votes || [] };
+  const entry = { id, name, mime: safeMime, ext, size: buf.length, createdAt: Date.now(), owner: willOwn ? user.id : (existing?.owner || null), anonOwner: willOwn ? null : (existing?.anonOwner || anon), votes: existing?.votes || [] };
   await updateJson(LIBRARY_FILE, (lib) => {
     const i = lib.findIndex((x) => x.id === id);
     if (i >= 0) lib[i] = { ...lib[i], ...entry, createdAt: lib[i].createdAt };
     else lib.push(entry);
     return lib;
   });
-  return json(res, 200, { ok: true, id });
+  return json(res, 200, { ok: true, id }, anonHeader ? { 'Set-Cookie': anonHeader } : {});
 }
 
 async function handleDelete(req, res, id) {
@@ -298,6 +319,9 @@ async function handleDelete(req, res, id) {
   if (entry.owner) {
     const user = await currentUser(req);
     if (!user || entry.owner !== user.id) return json(res, 403, { error: 'entry belongs to another account' });
+  } else if (entry.anonOwner) {
+    const anon = cookieAnon(req);
+    if (!anon || anon !== entry.anonOwner) return json(res, 403, { error: 'not your upload' });
   }
   // Alle Dateien mit dieser ID entfernen – auch Reste einer früheren Endung.
   for (const f of await fs.readdir(UPLOADS_DIR).catch(() => [])) {
@@ -388,17 +412,22 @@ async function handleHttp(req, res) {
       // Gelistet werden nur geteilte Entries + die eigenen (Private bleibt privat;
       // /uploads/ liefert eigene Bilder für die LAN-Runde weiterhin per ID.)
       const user = await currentUser(req);
+      const anon = cookieAnon(req);
       const lib = await readLibrary();
       return json(res, 200, lib
         .filter((x) => !x.owner || x.owner === user?.id)
-        .map(({ owner, ...x }) => ({ ...x, votes: x.votes || [], own: !!(user && owner === user.id) }))
+        .map(({ owner, anonOwner, ...x }) => ({
+          ...x,
+          votes: x.votes || [],
+          own: (!!user && owner === user.id) || (!owner && !!anonOwner && anonOwner === anon),
+        }))
         .sort((a, b) => b.votes.length - a.votes.length));
     }
     if (p === '/api/vote' && req.method === 'POST') return await handleVote(req, res);
     if (p === '/api/lobbies' && req.method === 'GET') {
       return json(res, 200, [...lobbyMeta.values()]
-        .filter((m) => m.public && rooms.get(m.code)?.size)
-        .map((m) => ({ code: m.code, name: m.name, players: rooms.get(m.code).size })));
+        .filter((m) => m.public && !m.started && rooms.get(m.code)?.size)
+        .map((m) => ({ code: m.code, name: m.name, players: rooms.get(m.code).size, max: m.max })));
     }
     if (p === '/api/upload' && req.method === 'POST') return await handleUpload(req, res);
     if (p === '/api/register' && req.method === 'POST') return await handleRegister(req, res);
@@ -421,7 +450,7 @@ async function handleHttp(req, res) {
 const server = http.createServer(handleHttp);
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const rooms = new Map(); // Raumcode -> Set<sock>
-const lobbyMeta = new Map(); // Raumcode -> { code, name, public } – für die öffentliche Lobby-Liste
+const lobbyMeta = new Map(); // Raumcode -> { code, name, public, hostId, max, started, known }
 
 function encodeFrame(str) {
   const payload = Buffer.from(String(str), 'utf8');
@@ -448,28 +477,46 @@ function broadcastText(code, text) {
 function broadcastJson(code, obj) { broadcastText(code, JSON.stringify(obj)); }
 
 const PLAYER_TYPES = new Set(['submit', 'vote', 'ownpack']);
-const CONTROL_TYPES = new Set(['start', 'turn', 'voting-start', 'result', 'final']);
+const CONTROL_TYPES = new Set(['start', 'turn', 'voting-start', 'result', 'final', 'abort', 'maxplayers']);
+const SERVER_TYPES = new Set(['roster', 'joined', 'left', 'rejected']);
 
 function relayMessage(sock, payload) {
   let msg;
   try { msg = JSON.parse(payload.toString('utf8')); } catch { return; } // nur valide JSON weiterschicken
   if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') return;
   // Servergesteuerte Events dürfen Clients nicht selbst erzeugen.
-  if (msg.type === 'roster' || msg.type === 'joined' || msg.type === 'left') return;
+  if (SERVER_TYPES.has(msg.type)) return;
   // Spieleraktionen immer an die echte Verbindung binden (kein selfId-Spoofing).
   if (PLAYER_TYPES.has(msg.type)) msg.selfId = sock.selfId;
-  // Nur der Host (erste Verbindung im Raum) darf den Spielablauf steuern.
+  const meta = lobbyMeta.get(sock.code);
+  const room = rooms.get(sock.code);
+  // Nur der Host darf den Spielablauf steuern (stabile ID, auch nach Reconnect).
   if (CONTROL_TYPES.has(msg.type)) {
-    const room = rooms.get(sock.code);
-    const host = room && [...room][0];
-    if (!host || host.selfId !== sock.selfId) return;
+    if (!meta || !room || meta.hostId !== sock.selfId) return;
+  }
+  if (msg.type === 'maxplayers') {
+    if (!meta || !room) return;
+    const max = Math.max(2, Math.min(30, Number(msg.max) || 12), room.size);
+    meta.max = max;
+    broadcastJson(sock.code, { type: 'maxplayers', max });
+    return;
   }
   if (msg.type === 'start') {
+    if (!meta || meta.started) return;
     msg.hostId = sock.selfId;
-    // Sobald eine Partie startet, verschwindet die Lobby aus der offenen Liste –
-    // sonst würden Quick-Play-Gäste mitten in eine laufende Runde joinen.
-    const meta = lobbyMeta.get(sock.code);
-    if (meta) meta.public = false;
+    // Sobald eine Partie startet, verschwindet die Lobby aus der offenen Liste und
+    // neue Spieler:innen werden abgewiesen – die Runde läuft bereits.
+    meta.public = false;
+    meta.started = true;
+  }
+  // Nach dem Finale ist die Partie vorbei: ein Rematch darf wieder starten.
+  if (msg.type === 'final' && meta) meta.started = false;
+  if (msg.type === 'abort' && meta) meta.started = false;
+  // Turn-Nachrichten betreffen genau eine Person – nicht an den ganzen Raum senden.
+  if (msg.type === 'turn') {
+    const target = room && [...room].find((s) => s.selfId === msg.playerId);
+    if (target) { try { target.ws.write(encodeFrame(JSON.stringify(msg))); } catch {} }
+    return;
   }
   broadcastText(sock.code, JSON.stringify(msg));
 }
@@ -552,7 +599,15 @@ function leaveRoom(sock) {
   const room = rooms.get(sock.code);
   if (!room) return;
   room.delete(sock);
-  broadcastJson(sock.code, { type: 'left', selfId: sock.selfId });
+  const meta = lobbyMeta.get(sock.code);
+  if (meta) {
+    // In der Lobby übernimmt die nächste Person; während einer laufenden Partie
+    // bleibt die Host-ID stabil, damit ein Reconnect die Spielleitung zurückbekommt.
+    if (meta.hostId === sock.selfId && !meta.started) {
+      meta.hostId = [...room][0]?.selfId || null;
+    }
+  }
+  broadcastJson(sock.code, { type: 'left', selfId: sock.selfId, hostId: meta?.hostId || null, max: meta?.max || 12 });
   if (!room.size) { rooms.delete(sock.code); lobbyMeta.delete(sock.code); }
 }
 
@@ -573,6 +628,7 @@ server.on('upgrade', (req, socket) => {
   const key = req.headers['sec-websocket-key'];
   if (!key) { socket.destroy(); return; }
   const accept = crypto.createHash('sha1').update(key + WS_GUID).digest('base64');
+  socket.on('error', () => {});
   socket.write(
     'HTTP/1.1 101 Switching Protocols\r\n' +
     'Upgrade: websocket\r\n' +
@@ -582,22 +638,84 @@ server.on('upgrade', (req, socket) => {
   );
 
   const code = String(u.searchParams.get('room') || '').toUpperCase().slice(0, 8) || 'ROOM';
-  const name = String(u.searchParams.get('name') || 'Gast').slice(0, 40);
+  const baseName = String(u.searchParams.get('name') || 'Gast').slice(0, 40);
   const selfId = String(u.searchParams.get('self') || crypto.randomUUID()).slice(0, 48);
+  const token = String(u.searchParams.get('token') || '').slice(0, 64);
 
-  const sock = { ws: socket, code, selfId, name, buf: Buffer.alloc(0), frag: null, lastSeen: Date.now(), dead: false, gone: false };
   let room = rooms.get(code) || new Set();
   rooms.set(code, room);
-  room.add(sock);
-  if (!lobbyMeta.has(code)) {
-    // Die erste Verbindung definiert den Raum (Name + Sichtbarkeit); spätere respektieren das
-    lobbyMeta.set(code, { code, name: String(u.searchParams.get('lobby') || '').slice(0, 40) || null, public: u.searchParams.get('pub') === '1' });
+  const isCreate = u.searchParams.get('create') === '1';
+  let meta = lobbyMeta.get(code);
+  if (!meta) {
+    if (!isCreate) {
+      // Ein Tippfehler im Code soll keine Geister-Lobby erzeugen.
+      try { socket.end(encodeFrame(JSON.stringify({ type: 'rejected', reason: 'notfound' }))); } catch { socket.destroy(); }
+      rooms.delete(code);
+      return;
+    }
+    // Die erste Verbindung definiert den Raum (Name, Sichtbarkeit, Host, Limit).
+    meta = {
+      code,
+      name: String(u.searchParams.get('lobby') || '').slice(0, 40) || null,
+      public: u.searchParams.get('pub') === '1',
+      hostId: selfId,
+      max: Math.max(2, Math.min(30, Number(u.searchParams.get('max')) || 12)),
+      started: false,
+      known: new Map(), // selfId -> Reconnect-Token (nicht an andere Clients geleakt)
+    };
+    lobbyMeta.set(code, meta);
+  } else if (isCreate && meta.hostId !== selfId) {
+    // Zufällig denselben Code erwischt (oder fremde Lobby): nicht kapern.
+    try { socket.end(encodeFrame(JSON.stringify({ type: 'rejected', reason: 'taken' }))); } catch { socket.destroy(); }
+    return;
+  }
+  const knownToken = meta.known.get(selfId);
+  if (knownToken !== undefined && knownToken !== token) {
+    try { socket.end(encodeFrame(JSON.stringify({ type: 'rejected', reason: 'conflict' }))); } catch { socket.destroy(); }
+    return;
+  }
+  // Namen im Raum eindeutig halten; ein Reconnect behält seinen alten Namen.
+  const previous = [...room].find((s) => s.selfId === selfId);
+  let name = previous?.name || baseName;
+  if (!previous && [...room].some((s) => s.name === name)) {
+    let i = 2;
+    while ([...room].some((s) => s.name === `${baseName} (${i})`)) i++;
+    name = `${baseName} (${i})`.slice(0, 40);
+  }
+
+  const known = meta.known.has(selfId);
+  if (meta.started && !known) {
+    try { socket.end(encodeFrame(JSON.stringify({ type: 'rejected', reason: 'started' }))); } catch { socket.destroy(); }
+    return;
+  }
+  if (!known && room.size >= meta.max) {
+    try { socket.end(encodeFrame(JSON.stringify({ type: 'rejected', reason: 'full' }))); } catch { socket.destroy(); }
+    return;
+  }
+
+  // Reconnect unter derselben selfId ersetzt die alte Verbindung still – sonst
+  // bekämen die anderen ein „left“, obwohl die Person nur kurz offline war.
+  for (const old of [...room]) {
+    if (old.selfId !== selfId) continue;
+    old.gone = true;
+    room.delete(old);
+    try { old.ws.destroy(); } catch {}
+  }
+
+  const sock = { ws: socket, code, selfId, name, buf: Buffer.alloc(0), frag: null, lastSeen: Date.now(), dead: false, gone: false };
+  meta.known.set(selfId, token);
+  if (meta.hostId === selfId && room.size) {
+    // Host an den Anfang der Beitrittsreihenfolge, damit Roster-Clients ihn zuerst sehen.
+    room = new Set([sock, ...room]);
+    rooms.set(code, room);
+  } else {
+    room.add(sock);
   }
 
   // Neue Verbindung bekommt zuerst den kompletten Raum-Bestand (Reihenfolge = Beitrittsreihenfolge)
   const roster = [...room].map((s) => ({ selfId: s.selfId, name: s.name }));
-  try { sock.ws.write(encodeFrame(JSON.stringify({ type: 'roster', players: roster }))); } catch {}
-  broadcastJson(code, { type: 'joined', selfId, name });
+  try { sock.ws.write(encodeFrame(JSON.stringify({ type: 'roster', players: roster, hostId: meta.hostId, max: meta.max }))); } catch {}
+  broadcastJson(code, { type: 'joined', selfId, name, hostId: meta.hostId, max: meta.max });
 
   socket.setNoDelay(true);
   socket.setTimeout(0);
@@ -629,8 +747,21 @@ export { server };
 
 // Nur bei direktem Start lauschen (node server.js), beim Import in Tests nicht
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  server.on('error', (e) => {
+    if (e.code === 'EADDRINUSE' || e.code === 'EACCES') {
+      console.error(`❌ Port ${PORT} ist belegt oder gesperrt. Starte mit einem anderen Port, z. B.:`);
+      console.error(`   PORT=8081 node server.js`);
+    } else {
+      console.error(e);
+    }
+    process.exit(1);
+  });
   server.listen(PORT, HOST, () => {
-    console.log(`🎨 MemeManufaktur läuft: http://localhost:${PORT}  (LAN: 0.0.0.0)`);
+    const lan = Object.values(os.networkInterfaces()).flat()
+      .filter((n) => n && n.family === 'IPv4' && !n.internal)
+      .map((n) => `http://${n.address}:${PORT}`);
+    console.log(`🎨 MemeManufaktur läuft: http://localhost:${PORT}`);
+    if (lan.length) console.log(`   Im LAN: ${lan.join('  ·  ')}`);
     console.log(`   Uploads landen in ${UPLOADS_DIR}`);
   });
 }

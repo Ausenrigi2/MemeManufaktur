@@ -5,14 +5,17 @@ export class Room {
   constructor(code, name, opts = {}) {
     this.code = code.toUpperCase();
     this.selfId = uid('ply');
+    this.token = uid('rtk');
     this.name = name;
     this.lobby = opts.lobby || '';
     this.pub = !!opts.pub;
+    this.create = !!opts.create;
     this.ws = null;
     this.state = 'closed'; // closed | connecting | open
     this.listeners = new Set();
     this.statusListeners = new Set();
     this._reconnect = null;
+    this._rejected = false;
     this._outbox = []; // Sends vor „open“ werden hier gepuffert
   }
 
@@ -24,15 +27,27 @@ export class Room {
   connect() {
     if (this.state === 'open' || this.state === 'connecting') return;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${proto}://${location.host}/ws?room=${encodeURIComponent(this.code)}&name=${encodeURIComponent(this.name)}&self=${encodeURIComponent(this.selfId)}&pub=${this.pub ? '1' : '0'}${this.lobby ? '&lobby=' + encodeURIComponent(this.lobby) : ''}`;
+    const url = `${proto}://${location.host}/ws?room=${encodeURIComponent(this.code)}&name=${encodeURIComponent(this.name)}&self=${encodeURIComponent(this.selfId)}&token=${encodeURIComponent(this.token)}&pub=${this.pub ? '1' : '0'}&create=${this.create ? '1' : '0'}${this.lobby ? '&lobby=' + encodeURIComponent(this.lobby) : ''}`;
     this._setStatus('connecting');
     const ws = new WebSocket(url);
     this.ws = ws;
     ws.onopen = () => { this._setStatus('open'); this._flushOutbox(); };
     ws.onmessage = (ev) => {
-      try { this._emit(JSON.parse(ev.data)); } catch {}
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg?.type === 'rejected') {
+          this._rejected = true;
+          this._manualClose = true;
+          clearTimeout(this._reconnect);
+        }
+        this._emit(msg);
+      } catch {}
     };
-    ws.onclose = () => { this._setStatus('closed'); this._tryReconnect(); };
+    ws.onclose = () => {
+      if (this._rejected) { this._setStatus('rejected'); return; }
+      this._setStatus('closed');
+      this._tryReconnect();
+    };
     ws.onerror = () => {};
   }
 

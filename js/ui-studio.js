@@ -1,6 +1,7 @@
 // ============ Studio-Seite ============
 import { el, t, toast, rand } from './lib.js';
 import { MemeCanvas, FONTS } from './editor.js';
+import { zoneFor, layerPatch } from './textzones.js';
 import { Packs, ServerAPI } from './packs.js';
 
 function ensureStudioStyles() {
@@ -153,7 +154,7 @@ export function openStudio(params = {}) {
       }
       await mc.setImage(blob, name);
       resetImageControls();
-      resetDefaultLayers();
+      resetDefaultLayers(id);
       if ([...tplSelect.options].some((o) => o.value === id)) tplSelect.value = id;
       markActiveTemplate(id);
       return true;
@@ -164,19 +165,21 @@ export function openStudio(params = {}) {
     }
   }
 
-  function resetDefaultLayers() {
+  function resetDefaultLayers(tplId = activeTplId) {
     mc.layers = [];
     mc.selectedId = null;
     const base = Math.min(mc.cw, mc.ch);
-    mc.addLayer({ text: '', y: Math.round(base * 0.12), fontSize: Math.round(base * 0.11), strokeWidth: Math.max(5, Math.round(base * 0.012)) });
-    mc.addLayer({ text: '', y: mc.ch - Math.round(base * 0.12), fontSize: Math.round(base * 0.11), strokeWidth: Math.max(5, Math.round(base * 0.012)) });
+    const z = zoneFor(tplId);
+    const defTop = { y: Math.round(base * 0.15), fontSize: Math.round(base * 0.11), strokeWidth: Math.max(5, Math.round(base * 0.012)) };
+    const defBottom = { y: mc.ch - Math.round(base * 0.15), fontSize: Math.round(base * 0.11), strokeWidth: Math.max(5, Math.round(base * 0.012)) };
+    mc.addLayer({ text: '', ...(layerPatch(mc, z?.top) || defTop) });
+    mc.addLayer({ text: '', ...(layerPatch(mc, z?.bottom) || defBottom) });
     syncPanelFromLayer();
   }
-
   async function useLocalImage(file) {
     await mc.setImage(file, file.name);
     resetImageControls();
-    resetDefaultLayers();
+    resetDefaultLayers(null);
     tplSelect.value = '';
     markActiveTemplate(null);
   }
@@ -210,16 +213,14 @@ export function openStudio(params = {}) {
     for (const l of [...mc.layers].reverse()) {
       const label = (l.text || '…').slice(0, 22);
       const selectLayer = () => mc.select(l.id);
-      const item = el('li', {
-        class: `layer-item${l.id === mc.selectedId ? ' selected' : ''}`,
-        role: 'button', tabindex: 0, 'aria-label': label,
-        onclick: selectLayer,
-        onkeydown: (e) => {
-          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectLayer(); }
+      const item = el('li', { class: `layer-item${l.id === mc.selectedId ? ' selected' : ''}` },
+        el('button', {
+          class: 'layer-select', type: 'button', 'aria-pressed': String(l.id === mc.selectedId),
+          title: t('studio.layers') + ': ' + label, onclick: selectLayer,
         },
-      },
-        el('span', { 'aria-hidden': 'true' }, '▣'),
-        el('span', { class: 'txt' }, label),
+          el('span', { 'aria-hidden': 'true' }, '▣'),
+          el('span', { class: 'txt' }, label),
+        ),
         el('button', { class: 'btn btn-icon btn-sm', type: 'button', title: t('studio.moveUp'), 'aria-label': t('studio.moveUp'), onclick: (e) => { e.stopPropagation(); mc.reorderLayer(l.id, -1); } }, '↑'),
         el('button', { class: 'btn btn-icon btn-sm', type: 'button', title: t('studio.moveDown'), 'aria-label': t('studio.moveDown'), onclick: (e) => { e.stopPropagation(); mc.reorderLayer(l.id, 1); } }, '↓'),
         el('button', { class: 'btn btn-icon btn-sm', type: 'button', title: t('studio.duplicate'), 'aria-label': t('studio.duplicate'), onclick: (e) => { e.stopPropagation(); mc.duplicateLayer(l.id); } }, '⧉'),
@@ -230,16 +231,16 @@ export function openStudio(params = {}) {
   }
 
   // ---------- Text-Panel ----------
-  const txtInput = el('textarea', { rows: 3, placeholder: 'Dein Text …' });
-  const fontSelect = el('select');
-  for (const [k, v] of Object.entries(FONTS)) fontSelect.append(el('option', { value: k }, v.label));
-  const sizeRange = el('input', { type: 'range', min: 10, max: 240, value: 70 });
-  const colorInput = el('input', { type: 'color', value: '#ffffff' });
-  const strokeColorInput = el('input', { type: 'color', value: '#000000' });
-  const strokeWRange = el('input', { type: 'range', min: 0, max: 24, value: 8 });
-  const hlCheck = el('input', { type: 'checkbox' });
-  const hlColor = el('input', { type: 'color', value: '#FFC93C' });
-  const alignSelect = el('select');
+  const txtInput = el('textarea', { rows: 3, id: 'studio-text', placeholder: t('studio.textPlaceholder') });
+  const fontSelect = el('select', { id: 'studio-font' });
+  for (const k of Object.keys(FONTS)) fontSelect.append(el('option', { value: k }, t(`studio.font.${k}`)));
+  const sizeRange = el('input', { type: 'range', min: 10, max: 240, value: 70, id: 'studio-size' });
+  const colorInput = el('input', { type: 'color', value: '#ffffff', id: 'studio-color' });
+  const strokeColorInput = el('input', { type: 'color', value: '#000000', id: 'studio-stroke-color' });
+  const strokeWRange = el('input', { type: 'range', min: 0, max: 24, value: 8, id: 'studio-stroke-w' });
+  const hlCheck = el('input', { type: 'checkbox', id: 'studio-highlight', 'aria-label': t('studio.highlight') });
+  const hlColor = el('input', { type: 'color', value: '#FFC93C', id: 'studio-highlight-color', 'aria-label': t('studio.highlight') });
+  const alignSelect = el('select', { id: 'studio-align' });
   alignSelect.append(el('option', { value: 'center' }, t('studio.alignC')));
   alignSelect.append(el('option', { value: 'left' }, t('studio.alignL')));
   alignSelect.append(el('option', { value: 'right' }, t('studio.alignR')));
@@ -263,27 +264,31 @@ export function openStudio(params = {}) {
   autoFitBtn.addEventListener('click', () => {
     const l = mc.selected();
     if (!l) return;
-    // Einfacher Auto-Fit: so groß wie möglich bei ≤ 6 Zeilen
+    // Größte Schriftgröße, die in höchstens 6 Zeilen und in die Höhe rund um die
+    // aktuelle Position passt (Zeilenumbrüche & lange Wörter inklusive).
     const target = Math.round(Math.min(mc.cw, mc.ch) * 0.35);
+    const maxH = Math.max(28, Math.min(mc.ch * 0.92, 2 * Math.min(l.y, mc.ch - l.y) - 16));
     let lo = 10, hi = target, best = 10;
-    const test = (size) => {
+    const ctx = document.createElement('canvas').getContext('2d');
+    const linesAt = (size) => {
       const font = FONTS[l.font] || FONTS.classic;
-      const ctx = document.createElement('canvas').getContext('2d');
       ctx.font = `${font.weight} ${size}px ${font.stack}`;
-      const words = String(l.uppercase ? l.text.toUpperCase() : l.text).split(/\s+/).filter(Boolean);
-      const lines = []; let cur = '';
-      for (const w of words) {
-        const testS = cur ? cur + ' ' + w : w;
-        if (ctx.measureText(testS).width > mc.cw * 0.92 && cur) { lines.push(cur); cur = w; } else cur = testS;
-      }
-      if (cur) lines.push(cur);
-      return lines.length;
+      return mc._wrapText(ctx, l.uppercase ? l.text.toUpperCase() : l.text, mc.cw * 0.92);
+    };
+    const fits = (size) => {
+      const lines = linesAt(size);
+      return lines.length <= 6 && lines.length * size * 1.18 <= maxH;
     };
     while (lo <= hi) {
       const mid = (lo + hi) >> 1;
-      if (test(mid) <= 6) { best = mid; lo = mid + 1; } else hi = mid - 1;
+      if (fits(mid)) { best = mid; lo = mid + 1; } else hi = mid - 1;
     }
-    mc.updateLayer(l.id, { fontSize: best });
+    const lines = linesAt(best).length;
+    const blockH = lines * best * 1.18;
+    const y = blockH >= mc.ch - 16
+      ? mc.ch / 2
+      : Math.min(Math.max(l.y, blockH / 2 + 8), mc.ch - blockH / 2 - 8);
+    mc.updateLayer(l.id, { fontSize: best, y: Math.round(y) });
   });
 
   function syncPanelFromLayer() {
@@ -308,9 +313,9 @@ export function openStudio(params = {}) {
   // ---------- Bild-Panel + Bühnen-Toolbar ----------
   const zoomRange = el('input', { type: 'range', min: 100, max: 250, value: 100, id: 'studio-zoom', 'aria-label': t('studio.zoom') });
   const zoomValue = el('output', { class: 'stage-zoom-val', for: 'studio-zoom' }, '100%');
-  const brightRange = el('input', { type: 'range', min: 40, max: 200, value: 100 });
-  const contrastRange = el('input', { type: 'range', min: 40, max: 200, value: 100 });
-  const satRange = el('input', { type: 'range', min: 0, max: 250, value: 100 });
+  const brightRange = el('input', { type: 'range', min: 40, max: 200, value: 100, id: 'studio-bright' });
+  const contrastRange = el('input', { type: 'range', min: 40, max: 200, value: 100, id: 'studio-contrast' });
+  const satRange = el('input', { type: 'range', min: 0, max: 250, value: 100, id: 'studio-saturate' });
   const flipBtn = el('button', { class: 'btn btn-sm', type: 'button', 'aria-pressed': 'false' }, '⇋ ' + t('studio.flip'));
   const rotBtn = el('button', { class: 'btn btn-sm', type: 'button' }, '⟳ ' + t('studio.rotate'));
   const resetBtn = el('button', { class: 'btn btn-sm', type: 'button' }, '↺ ' + t('studio.reset'));
@@ -358,10 +363,10 @@ export function openStudio(params = {}) {
   );
 
   // ---------- Export ----------
-  const fmtSelect = el('select');
+  const fmtSelect = el('select', { id: 'studio-format' });
   fmtSelect.append(el('option', { value: 'image/png' }, 'PNG'));
   fmtSelect.append(el('option', { value: 'image/jpeg' }, 'JPEG'));
-  const qRange = el('input', { type: 'range', min: 50, max: 98, value: 92 });
+  const qRange = el('input', { type: 'range', min: 50, max: 98, value: 92, id: 'studio-quality' });
   const dlBtn = el('button', { class: 'btn btn-primary', type: 'button' }, '⬇ ' + t('studio.download'));
   const cpBtn = el('button', { class: 'btn', type: 'button' }, '⧉ ' + t('studio.copy'));
 
@@ -376,7 +381,7 @@ export function openStudio(params = {}) {
       const blob = await mc.toBlob('image/png');
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
       toast(t('studio.copied'));
-    } catch { toast('Kopieren nicht möglich – nutze „Herunterladen“'); }
+    } catch { toast(t('studio.copyFailed')); }
   });
 
   // ---------- Tastatur ----------
@@ -418,6 +423,7 @@ export function openStudio(params = {}) {
   function cleanup() {
     abort.abort();
     revokeThumbs();
+    mc.destroy();
     if (currentStudioCleanup === cleanup) currentStudioCleanup = null;
   }
   currentStudioCleanup = cleanup;
@@ -439,33 +445,33 @@ export function openStudio(params = {}) {
           layerList,
           el('p', { class: 'studio-keys' }, t('studio.keys')),
           el('h3', {}, t('studio.text')),
-          el('label', {}, t('studio.content')), txtInput,
+          el('label', { for: 'studio-text' }, t('studio.content')), txtInput,
           el('div', { class: 'fieldrow', style: 'margin-top:12px' },
-            el('div', { class: 'grow' }, el('label', {}, t('studio.font')), fontSelect),
-            el('div', {}, el('label', {}, t('studio.size')), sizeRange),
+            el('div', { class: 'grow' }, el('label', { for: 'studio-font' }, t('studio.font')), fontSelect),
+            el('div', {}, el('label', { for: 'studio-size' }, t('studio.size')), sizeRange),
           ),
           el('div', { class: 'fieldrow' },
-            el('div', {}, el('label', {}, t('studio.color')), colorInput),
-            el('div', {}, el('label', {}, t('studio.strokeW')), strokeWRange),
-            el('div', {}, el('label', {}, t('studio.stroke')), strokeColorInput),
+            el('div', {}, el('label', { for: 'studio-color' }, t('studio.color')), colorInput),
+            el('div', {}, el('label', { for: 'studio-stroke-w' }, t('studio.strokeW')), strokeWRange),
+            el('div', {}, el('label', { for: 'studio-stroke-color' }, t('studio.stroke')), strokeColorInput),
           ),
           el('div', { class: 'fieldrow' },
             el('div', { style: 'display:flex;gap:8px;align-items:center' }, hlCheck, el('span', {}, t('studio.highlight'))),
             hlColor,
           ),
           el('div', { class: 'fieldrow' },
-            el('div', { class: 'grow' }, el('label', {}, t('studio.align')), alignSelect),
+            el('div', { class: 'grow' }, el('label', { for: 'studio-align' }, t('studio.align')), alignSelect),
             el('label', { style: 'display:flex;gap:8px;align-items:center;margin:0' }, upperCheck, t('studio.upper')),
           ),
           el('div', { style: 'display:flex;gap:8px' }, autoFitBtn),
           el('h3', {}, t('studio.image')),
-          el('div', { class: 'fieldrow' }, el('div', {}, el('label', {}, t('studio.bright')), brightRange)),
-          el('div', { class: 'fieldrow' }, el('div', {}, el('label', {}, t('studio.contrast')), contrastRange)),
-          el('div', { class: 'fieldrow' }, el('div', {}, el('label', {}, t('studio.saturate')), satRange)),
+          el('div', { class: 'fieldrow' }, el('div', {}, el('label', { for: 'studio-bright' }, t('studio.bright')), brightRange)),
+          el('div', { class: 'fieldrow' }, el('div', {}, el('label', { for: 'studio-contrast' }, t('studio.contrast')), contrastRange)),
+          el('div', { class: 'fieldrow' }, el('div', {}, el('label', { for: 'studio-saturate' }, t('studio.saturate')), satRange)),
           el('h3', {}, t('studio.export')),
           el('div', { class: 'fieldrow' },
-            el('div', { class: 'grow' }, el('label', {}, t('studio.format')), fmtSelect),
-            el('div', {}, el('label', {}, t('studio.quality')), qRange),
+            el('div', { class: 'grow' }, el('label', { for: 'studio-format' }, t('studio.format')), fmtSelect),
+            el('div', {}, el('label', { for: 'studio-quality' }, t('studio.quality')), qRange),
           ),
           el('div', { style: 'display:flex;gap:10px;flex-wrap:wrap;margin-top:6px' }, dlBtn, cpBtn),
         ),

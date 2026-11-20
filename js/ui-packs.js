@@ -143,7 +143,8 @@ export function openPacks() {
     toast(t('pakete.uploading', { n: files.length }), 60000);
     try {
       const res = await Packs.uploadFiles(files, packId, { shared });
-      toast(t('pakete.uploaded', { n: res.length }));
+      if (res.failed?.length) toast('⚠️ ' + t('pakete.uploadSharedFailed', { n: res.failed.length }));
+      else toast(t('pakete.uploaded', { n: res.length }));
     } catch (e) {
       console.error(e);
       toast('⚠️ ' + t('pakete.uploadFailed'));
@@ -238,14 +239,24 @@ export function openPacks() {
     const card = el('div', { class: 'card account' }, el('h2', {}, '👤 ' + t('account.title')));
     if (!ServerAPI.available) { card.append(el('p', { style: 'color:var(--muted)' }, t('account.needserver'))); return card; }
     if (!info) {
-      const email = el('input', { type: 'email', name: 'email', autocomplete: 'email', spellcheck: false, placeholder: 'you@example.com…' });
-      const pw = el('input', { type: 'password', name: 'password', autocomplete: 'new-password', minlength: 8 });
-      const act = async (fn) => { try { await fn.call(ServerAPI, email.value.trim(), pw.value); refresh(); } catch (e) { toast('⚠️ ' + e.message); } };
+      const email = el('input', { type: 'email', name: 'email', id: 'account-email', autocomplete: 'email', spellcheck: false, placeholder: 'you@example.com…' });
+      const pw = el('input', { type: 'password', name: 'password', id: 'account-password', autocomplete: 'new-password', minlength: 8 });
+      const act = async (fn) => {
+        try { await fn.call(ServerAPI, email.value.trim(), pw.value); refresh(); }
+        catch (e) {
+          const raw = String(e.message || e);
+          const key = raw.includes('already registered') ? 'account.emailTaken'
+            : raw.includes('wrong email') ? 'account.badLogin'
+              : raw.includes('password too short') ? 'account.pwShort'
+                : null;
+          toast('⚠️ ' + (key ? t(key) : raw));
+        }
+      };
       card.append(
         el('p', { style: 'color:var(--muted)' }, t('account.lead')),
         el('div', { class: 'fieldrow' },
-          el('div', { class: 'grow' }, el('label', {}, t('account.email')), email),
-          el('div', { class: 'grow' }, el('label', {}, t('account.password')), pw),
+          el('div', { class: 'grow' }, el('label', { for: 'account-email' }, t('account.email')), email),
+          el('div', { class: 'grow' }, el('label', { for: 'account-password' }, t('account.password')), pw),
         ),
         el('div', { style: 'display:flex;gap:10px;flex-wrap:wrap' },
           el('button', { class: 'btn btn-primary', type: 'button', onclick: () => act(ServerAPI.register) }, t('account.register')),

@@ -95,7 +95,7 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
 .topnav a {
   text-decoration: none; color: var(--ink); font-weight: 800; font-size: 0.95rem;
   padding: 8px 15px; border: 2px solid transparent; border-radius: 999px;
-  transition: background 0.12s, border-color 0.12s, transform 0.12s;
+  transition: border-color 0.12s, transform 0.12s;
 }
 .topnav a:hover { border-color: var(--ink); background: var(--yellow); box-shadow: var(--shadow-sm); transform: translateY(-1px); }
 .topnav a.current { background: var(--ink); color: #fff; }
@@ -121,8 +121,8 @@ footer .wrap { display: flex; justify-content: space-between; gap: 12px; padding
 .btn:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
 .btn-primary { background: var(--yellow); color: var(--on-accent); }
 .btn-blue { background: var(--blue); color: #fff; }
-.btn-green { background: var(--green); color: #fff; }
-.btn-red { background: var(--red); color: #fff; }
+.btn-green { background: var(--green); color: var(--on-accent); }
+.btn-red { background: var(--red); color: var(--on-accent); }
 .btn-sm { padding: 6px 13px; font-size: 0.85rem; box-shadow: var(--shadow-sm); }
 .btn-icon { padding: 7px 10px; line-height: 1; }
 .btn[disabled] { opacity: 0.45; pointer-events: none; box-shadow: none; }
@@ -189,7 +189,7 @@ select { cursor: pointer; }
 .pc-emoji { display: block; font-size: 1.7rem; line-height: 1; }
 .pc-title { display: block; font-family: var(--font-display); font-size: clamp(1.7rem, 3.2vw, 2.5rem); font-weight: 900; line-height: 1.02; margin-top: 8px; letter-spacing: -0.02em; }
 .pc-desc { display: block; font-weight: 700; max-width: 58%; margin-top: 6px; }
-.play-card.private .pc-desc { color: #e7ebff; }
+.play-card.private .pc-desc { color: #fff; }
 .pc-cta {
   display: inline-flex; align-items: center; gap: 6px; margin-top: 16px;
   background: var(--ink); color: var(--yellow); border: 2px solid var(--ink);
@@ -318,11 +318,13 @@ select { cursor: pointer; }
 .timerbar { height: 18px; border: var(--border); border-radius: 999px; background: #fff; overflow: hidden; margin: 12px 0 18px; }
 .timerbar i { display: block; height: 100%; background: var(--green); transition: width 0.2s linear, background 0.3s; }
 .timerbar.warn i { background: var(--red); }
-.vote-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; text-align: left; }
+.vote-grid { columns: 2; column-gap: 16px; text-align: left; }
+.vote-grid .vote-card { break-inside: avoid; margin: 0 0 16px; }
 .vote-card { border: var(--border); border-radius: 14px; background: #fff; overflow: hidden; box-shadow: var(--shadow-sm); transition: transform 0.1s; }
 .vote-card:hover { transform: translateY(-3px); }
 .vote-card img { width: 100%; display: block; border-bottom: var(--border); }
-.vote-meta { padding: 8px 12px 4px; font-weight: 900; }
+.vote-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px 10px; font-weight: 900; }
+.result-save { margin-top: 8px; }
 .vote-btns { display: flex; gap: 6px; padding: 0 12px 12px; }
 .vbtn { flex: 1; border: var(--border); border-radius: 10px; background: var(--card); color: var(--ink); padding: 8px 4px; font-size: 0.85rem; font-weight: 900; cursor: pointer; }
 .vbtn:hover { background: var(--input); }
@@ -336,6 +338,7 @@ select { cursor: pointer; }
 .result-row img { width: 92px; border: var(--border); border-radius: 10px; }
 .result-row .pts { margin-left: auto; font-family: var(--font-display); font-size: 1.5rem; font-weight: 900; }
 .result-row.winner { background: var(--yellow); color: var(--on-accent); }
+.result-row.winner .voters { color: var(--ink); }
 .voters { display: flex; gap: 4px; flex-wrap: wrap; font-size: 0.78rem; color: var(--muted); font-weight: 700; }
 .final-rank { display: grid; gap: 14px; max-width: 560px; margin: 20px auto; }
 .final-row {
@@ -383,7 +386,8 @@ select { cursor: pointer; }
 @media (max-width: 900px) {
   .play-grid, .home-lower, .studio-grid, .game-grid { grid-template-columns: 1fr; }
   .stage-wrap { position: static; order: -1; }
-  .vote-grid, .how-grid { grid-template-columns: 1fr; }
+  .how-grid { grid-template-columns: 1fr; }
+  .vote-grid { columns: 1; }
   .play-card { min-height: 180px; }
 }
 

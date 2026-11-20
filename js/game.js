@@ -2,7 +2,7 @@
 import { el, t, LS, rand, shuffle, toast, confetti, roomCode, uid } from './lib.js';
 import { MemeCanvas, renderMemeToDataUrl } from './editor.js';
 import { zoneFor, layerPatch, normLayers } from './textzones.js';
-import { Packs, ServerAPI } from './packs.js';
+import { Packs, ServerAPI, BUILTIN_GROUPS } from './packs.js';
 import { Room } from './net.js';
 
 // Spiel-Styles liegen in css/game.css; index.html bleibt unangetastet.
@@ -98,28 +98,60 @@ export async function resolveTpl(key) {
   if (window.__lanTpls?.[key]) {
     const res = await fetch(window.__lanTpls[key]);
     if (!res.ok) return null;
-    return { blob: await res.blob(), name: key };
+    return { blob: await res.blob(), name: key, id: key };
   }
   if (key.startsWith('srv:')) {
     const res = await fetch(ServerAPI.url(key.slice(4)));
     if (!res.ok) return null;
-    return { blob: await res.blob(), name: key };
+    return { blob: await res.blob(), name: key, id: key };
   }
   const tpl = await Packs.getTemplate(key);
-  return tpl ? { blob: tpl.blob, name: tpl.name } : null;
+  if (tpl) return { blob: tpl.blob, name: tpl.name, id: tpl.id || key };
+  // Fallback, falls IndexedDB noch nicht gefüllt ist: eingebautes Asset direkt laden.
+  const builtin = BUILTIN_GROUPS.flatMap((g) => g.files).find(([k]) => `builtin_${k}` === key);
+  if (builtin) {
+    const [k, name, ext = 'svg'] = builtin;
+    const res = await fetch(`assets/templates/${k}.${ext}`);
+    if (res.ok) return { blob: await res.blob(), name, id: key };
+  }
+  return null;
+}
+
+function renderAbort(reason) {
+  const app = document.getElementById('app');
+  app.innerHTML = '';
+  app.append(el('div', { class: 'wrap' },
+    el('div', { class: 'card', style: 'max-width:520px;margin:34px auto;text-align:center' },
+      el('h2', {}, '🫠 ' + t('spiel.abort.title')),
+      el('p', { style: 'color:var(--muted);font-weight:700' }, t('spiel.abort.body', { reason: String(reason || '?').slice(0, 160) })),
+      el('button', { class: 'btn btn-primary', style: 'margin-top:8px', onclick: () => { location.hash = '#/'; } }, '← ' + t('spiel.final.home')),
+    ),
+  ));
+  window.scrollTo(0, 0);
+}
+
+function downloadImage(url, name = 'meme') {
+  if (!url) return;
+  const slug = String(name).replace(/[^\wäöüÄÖÜß-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'meme';
+  const a = el('a', { href: url, download: `${slug}.jpg` });
+  document.body.append(a);
+  a.click();
+  a.remove();
 }
 
 async function pickTemplates(count, mode, idList = [], ownPools = null) {
   const all = await Packs.allTemplates();
   // ownPools: pro Spieler eigene Keys ('srv:...') – nur wenn der Host sie erlaubt.
-  const needPool = !ownPools || idList.some((id) => !ownPools.get(id)?.length);
-  if (!all.length && needPool) throw new Error('Keine Templates – erst Bilder in Pakete hochladen.');
+  const ownAllowed = !!ownPools && mode !== 'same';
+  const anyOwn = !!ownPools && idList.some((id) => ownPools.get(id)?.length);
+  if (!all.length && !anyOwn) throw new Error(t('spiel.noTemplates'));
   const pool = shuffle(all);
   const out = [];
   for (let i = 0; i < count; i++) {
     // 'same' behält bewusst EIN gemeinsames Template – eigene Packs gelten nur in random/theme
-    const own = ownPools && mode !== 'same' ? ownPools.get(idList[i]) : null;
+    const own = ownAllowed ? ownPools?.get(idList[i]) : null;
     if (own?.length) { out.push(rand(own)); continue; }
+    if (!pool.length) throw new Error(t('spiel.noCommonTemplates'));
     out.push(mode === 'same' ? pool[0].id : pool[i % pool.length].id);
   }
   return out;
@@ -132,6 +164,9 @@ async function pickTemplates(count, mode, idList = [], ownPools = null) {
 export async function openLobby(container) {
   container.innerHTML = '';
   if (!ServerAPI.available) {
+    try { await ServerAPI.check(); } catch { /* offline */ }
+  }
+  if (!ServerAPI.available) {
     container.append(el('div', { class: 'wrap' },
       el('div', { class: 'card', style: 'max-width:560px;margin:34px auto' },
         el('h2', {}, t('lobby.title')),
@@ -141,8 +176,10 @@ export async function openLobby(container) {
     return;
   }
 
-  const nameInput = el('input', { type: 'text', name: 'name', autocomplete: 'name', value: 'Gast_' + Math.floor(Math.random() * 900 + 100) });
-  const lobbyInput = el('input', { type: 'text', name: 'lobby', placeholder: t('lobby.name') });
+  const savedName = LS.get('playerName', '');
+  const defaultName = t('spiel.guest') + '_' + Math.floor(Math.random() * 900 + 100);
+  const nameInput = el('input', { type: 'text', name: 'name', id: 'player-name', autocomplete: 'name', maxlength: 40, value: savedName || defaultName });
+  const lobbyInput = el('input', { type: 'text', name: 'lobby', id: 'lobby-name', maxlength: 40, placeholder: t('lobby.name') });
   const codeInput = el('input', { type: 'text', name: 'code', maxlength: 4, 'aria-label': t('lobby.byCode') });
   // Einladungslink (#/spiel?code=XXXX) füllt den Code direkt vor.
   const wantsCode = new URLSearchParams(location.hash.split('?')[1] || '').get('code');
@@ -152,10 +189,11 @@ export async function openLobby(container) {
   let entering = false;
 
   async function join(code, opts = {}) {
-    const name = nameInput.value.trim();
+    const name = nameInput.value.trim().slice(0, 40);
     if (!name) { toast(t('spiel.yourName')); return; }
     if (entering) return;
     entering = true;
+    LS.set('playerName', name);
     clearInterval(poll);
     await enterLobby({ code, host: !!opts.host, name, statusEl, lobby: opts.lobby, pub: !!opts.pub });
   }
@@ -167,7 +205,8 @@ export async function openLobby(container) {
   async function quickPlay() {
     let list = [];
     try { list = await ServerAPI.lobbies(); } catch { list = []; }
-    if (list.length) join(list[0].code, { pub: true });
+    const open = list.find((l) => l.players < (l.max || 30));
+    if (open) join(open.code, { pub: true });
     else createLobby(true);
   }
 
@@ -186,7 +225,7 @@ export async function openLobby(container) {
     if (!list.length) { listWrap.append(el('p', { style: 'color:var(--muted);margin:0' }, t('lobby.noOpen'))); return; }
     for (const l of list) {
       listWrap.append(el('div', { class: 'lobby-row' },
-        el('span', {}, (l.name || l.code) + ' · ' + t('lobby.playersIn', { n: l.players })),
+        el('span', {}, (l.name || l.code) + ' · ' + (l.max ? t('lobby.playersInMax', { n: l.players, max: l.max }) : t('lobby.playersIn', { n: l.players }))),
         el('button', { class: 'btn btn-sm btn-blue', type: 'button', onclick: () => join(l.code, { pub: true }) }, '→ ' + t('lobby.join')),
       ));
     }
@@ -206,8 +245,8 @@ export async function openLobby(container) {
         el('p', { class: 'home-lead' }, t('home.lead')),
       ),
       el('div', { class: 'home-fields' },
-        el('div', {}, el('label', {}, t('spiel.yourName')), nameInput),
-        el('div', {}, el('label', {}, t('home.lobbyName')), lobbyInput),
+        el('div', {}, el('label', { for: 'player-name' }, t('spiel.yourName')), nameInput),
+        el('div', {}, el('label', { for: 'lobby-name' }, t('home.lobbyName')), lobbyInput),
       ),
       el('div', { class: 'play-grid' },
         el('button', { class: 'play-card quick', type: 'button', onclick: quickPlay },
@@ -253,12 +292,18 @@ export async function openLobby(container) {
 function enterLobby({ code, host, name, statusEl, lobby, pub }) {
   return new Promise((resolve) => {
     const app = document.getElementById('app');
-    const room = new Room(code, name, { lobby, pub });
+    // Die Spiel-URL bleibt immer auf der Spiel-Route – sonst würde ein Klick auf
+    // „Spiel“ die Lobby neu rendern, während die Partie im Hintergrund weiterläuft.
+    try { history.replaceState(null, '', '#/spiel'); } catch {}
+    const room = new Room(code, name, { lobby, pub, create: !!host });
     const players = new Map(); // selfId -> name
     let myId = room.selfId;
     let hostId = host ? myId : null;
     let leftGame = false;
     let startedFlag = false; // true sobald „start“ im Raum angekommen ist
+    let startRequested = false;
+    let hostLostTimer = null;
+    let roomMax = 12;
     let ownKeys = []; // eigene Server-Keys dieser Person ('srv:...')
     lanState.room = room;
     window.__mmInGame = true;
@@ -275,6 +320,8 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
     let setupCardOuter = null; // Host-Einstellungen (erst nach dem Setup zugewiesen)
 
     function renderLobby() {
+      lanState.hostId = hostId;
+      lanState.myId = myId;
       lobbyCard.innerHTML = '';
       const inviteUrl = `${location.origin}${location.pathname}#/spiel?code=${encodeURIComponent(code)}`;
 
@@ -300,7 +347,7 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
             }, '🔗 ' + t('spiel.invite.copy')),
           ),
         ),
-        el('label', {}, t('spiel.players')),
+        el('label', {}, `${t('spiel.players')} · ${players.size}/${roomMax}`),
         chipsWrap,
       );
       chipsWrap.innerHTML = '';
@@ -311,7 +358,7 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
       if (ownKeys.length && cfg.ownPacks) lobbyCard.append(el('p', { style: 'color:var(--muted);font-size:0.85rem;margin-top:10px' }, t('spiel.ownPacks.use')));
       if (cfg.ownPacks) lobbyCard.append(el('p', { style: 'color:var(--muted);font-size:0.85rem;margin-top:10px' }, t('spiel.ownPacks.on')));
       if (hostId === myId) {
-        const canStart = players.size >= 2;
+        const canStart = players.size >= 2 && !startRequested;
         lobbyCard.append(el('div', { class: 'lobby-actions' },
           el('button', {
             class: 'btn btn-primary', type: 'button', disabled: !canStart,
@@ -320,7 +367,7 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
           }, '🚀 ' + t('spiel.start')),
           el('button', { class: 'btn', type: 'button', onclick: () => leave() }, '← ' + t('spiel.final.home')),
         ));
-        if (!canStart) lobbyCard.append(el('p', { class: 'lobby-hint', role: 'status' }, '⏳ ' + t('spiel.lobby.needPlayers')));
+        if (players.size < 2) lobbyCard.append(el('p', { class: 'lobby-hint', role: 'status' }, '⏳ ' + t('spiel.lobby.needPlayers')));
       } else {
         lobbyCard.append(
           el('div', { class: 'lobby-waitbox', role: 'status', 'aria-live': 'polite' },
@@ -337,28 +384,44 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
     }
 
     // Setup-Formular für Host in der Lobby
-    let cfg = { mode: 'random', relaxed: false, rounds: 3, timeSec: 90, ownPacks: false };
+    let cfg = { mode: 'random', relaxed: false, rounds: 3, timeSec: 90, maxPlayers: 12, ownPacks: false };
     function setupControls() {
       const g = el('div', { class: 'card', style: 'max-width:560px;margin:14px auto' });
       const set = (k, v) => { cfg[k] = v; };
       const radios = el('div', { class: 'mode-cards' });
       for (const m of ['random', 'same', 'theme']) {
         radios.append(el('label', { class: 'mode-card' },
-          el('input', { type: 'radio', name: 'lm', value: m, checked: m === 'random' ? 'checked' : '' }),
+          el('input', { type: 'radio', name: 'lm', value: m, ...(m === 'random' ? { checked: true } : {}) }),
           el('span', { class: 'mode-copy' },
             el('strong', {}, t(`spiel.modes.${m}`)),
             el('small', {}, t(`spiel.modes.${m}.d`)),
           ),
         ));
       }
-      radios.querySelectorAll('input').forEach((r) => r.addEventListener('change', () => set('mode', radios.querySelector('input:checked').value)));
-      const rel = el('input', { type: 'checkbox' });
+      const syncModeCards = () => {
+        for (const card of radios.querySelectorAll('.mode-card')) {
+          card.classList.toggle('selected', !!card.querySelector('input')?.checked);
+        }
+      };
+      syncModeCards();
+      radios.querySelectorAll('input').forEach((r) => r.addEventListener('change', () => {
+        set('mode', radios.querySelector('input:checked').value);
+        syncModeCards();
+      }));
+      const rel = el('input', { type: 'checkbox', 'aria-label': t('spiel.relaxed') });
       rel.addEventListener('change', () => set('relaxed', rel.checked));
-      const roundsSel = el('select', {}, ...[1, 2, 3, 4, 5, 6, 7, 8].map((n) => el('option', { value: n, ...(n === 3 ? { selected: '' } : {}) }, String(n))));
+      const roundsSel = el('select', { id: 'setup-rounds' }, ...[1, 2, 3, 4, 5, 6, 7, 8].map((n) => el('option', { value: n, ...(n === 3 ? { selected: true } : {}) }, String(n))));
       roundsSel.addEventListener('change', () => set('rounds', Number(roundsSel.value) || 3));
-      const timeSel = el('select', {}, ...[45, 60, 90, 120].map((n) => el('option', { value: n, ...(n === 90 ? { selected: '' } : {}) }, n + ' s')));
+      const timeSel = el('select', { id: 'setup-time' }, ...[30, 45, 60, 90, 120, 180, 240, 300].map((n) => el('option', { value: n, ...(n === 90 ? { selected: true } : {}) }, n + ' s')));
       timeSel.addEventListener('change', () => set('timeSec', Number(timeSel.value) || 90));
-      const ownChk = el('input', { type: 'checkbox' });
+      const maxSel = el('select', { id: 'setup-max', 'aria-label': t('lobby.maxPlayers'), 'data-max': '' }, ...Array.from({ length: 29 }, (_, i) => i + 2).map((n) => el('option', { value: n, ...(n === 12 ? { selected: true } : {}) }, String(n))));
+      maxSel.addEventListener('change', () => {
+        const max = Number(maxSel.value) || 12;
+        set('maxPlayers', max);
+        lanState.room?.send({ type: 'maxplayers', max });
+        renderLobby();
+      });
+      const ownChk = el('input', { type: 'checkbox', 'aria-label': t('spiel.ownPacks') });
       ownChk.addEventListener('change', () => set('ownPacks', ownChk.checked));
       g.append(
         el('h3', {}, t('spiel.setup.t')),
@@ -366,21 +429,23 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
         el('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:10px' }, rel, el('span', {}, t('spiel.relaxed'))),
         el('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:10px' }, ownChk, el('span', {}, t('spiel.ownPacks'))),
         el('div', { class: 'fieldrow', style: 'margin-top:10px' },
-          el('div', {}, el('label', {}, t('spiel.rounds')), roundsSel),
-          el('div', {}, el('label', {}, t('spiel.time')), timeSel),
+          el('div', {}, el('label', { for: 'setup-rounds' }, t('spiel.rounds')), roundsSel),
+          el('div', {}, el('label', { for: 'setup-time' }, t('spiel.time')), timeSel),
+          el('div', {}, el('label', { for: 'setup-max' }, t('lobby.maxPlayers')), maxSel),
         ),
       );
       return g;
     }
 
-    const gameArea = el('div');
     setupCardOuter = setupControls();
     app.innerHTML = '';
-    app.append(el('div', { class: 'wrap' }, lobbyCard, setupCardOuter, gameArea));
+    app.append(el('div', { class: 'wrap' }, lobbyCard, setupCardOuter));
     renderLobby();
 
     function hardLeave() {
       leftGame = true;
+      clearTimeout(hostLostTimer);
+      hostLostTimer = null;
       window.__mmInGame = false;
       if (lanState.room === room) lanState.room = null;
       room.close();
@@ -388,6 +453,30 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
     function leave() {
       hardLeave();
       location.hash = '#/';
+    }
+
+    function showRejected(reason) {
+      if (leftGame) return;
+      hardLeave();
+      app.innerHTML = '';
+      app.append(el('div', { class: 'wrap' },
+        el('div', { class: 'card', style: 'max-width:480px;margin:30px auto;text-align:center' },
+          el('h2', {}, '🚫'),
+          el('p', { style: 'font-weight:700' }, t(reason === 'full' ? 'lobby.full' : reason === 'conflict' ? 'lobby.conflict' : reason === 'taken' ? 'lobby.taken' : reason === 'notfound' ? 'lobby.notfound' : 'lobby.started')),
+          el('button', { class: 'btn btn-primary', style: 'margin-top:10px', onclick: () => { location.hash = '#/'; } }, '← ' + t('spiel.final.home')),
+        ),
+      ));
+    }
+
+    function showHostLost() {
+      if (leftGame) return;
+      app.innerHTML = '';
+      app.append(el('div', { class: 'wrap phase-screen' },
+        el('div', { class: 'card', style: 'max-width:480px;margin:20px auto;text-align:center' },
+          el('p', { style: 'font-size:1.1rem;font-weight:700' }, '🫠 ' + t('spiel.hostLeft')),
+          el('button', { class: 'btn', style: 'margin-top:10px', onclick: () => leave() }, '← ' + t('spiel.final.home')),
+        ),
+      ));
     }
 
     // Wer die Spiel-Route per Navigation verlässt, verlässt auch den Raum –
@@ -408,53 +497,88 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
     }
 
     room.onStatus((s) => {
-      if (s === 'closed') setStatus('⚠️ ' + t('lobby.error'));
-      else if (s === 'open' && ownKeys.length) room.send({ type: 'ownpack', selfId: myId, tpls: ownKeys });
+      if (s === 'closed' && !leftGame) {
+        setStatus('⚠️ ' + t('lobby.reconnecting'));
+        if (startedFlag) toast('⚠️ ' + t('lobby.reconnecting'), 4000);
+      } else if (s === 'open' && ownKeys.length) room.send({ type: 'ownpack', selfId: myId, tpls: ownKeys });
     });
 
     room.onMessage(async (msg) => {
       if (leftGame) return;
       switch (msg.type) {
+        case 'rejected':
+          showRejected(msg.reason);
+          break;
         case 'ownpack':
-          if (hostId === myId) { lanState.ownPacks.set(msg.selfId, msg.tpls || []); renderLobby(); }
+          if (hostId === myId) {
+            const keys = (Array.isArray(msg.tpls) ? msg.tpls : [])
+              .filter((k) => typeof k === 'string' && k.startsWith('srv:'))
+              .slice(0, 200);
+            lanState.ownPacks.set(msg.selfId, keys);
+            renderLobby();
+          }
+          break;
+        case 'maxplayers':
+          roomMax = Number(msg.max) || roomMax;
+          cfg.maxPlayers = roomMax;
+          if (setupCardOuter) {
+            const sel = setupCardOuter.querySelector('[data-max]');
+            if (sel) sel.value = String(roomMax);
+          }
+          renderLobby();
           break;
         case 'roster':
           players.clear();
           for (const p of msg.players) players.set(p.selfId, p.name);
-          if (msg.players.length) hostId = msg.players[0].selfId;
+          if (msg.max) roomMax = msg.max;
+          if (msg.hostId) hostId = msg.hostId;
+          else if (msg.players.length) hostId = msg.players[0].selfId;
+          if (players.has(hostId)) { clearTimeout(hostLostTimer); hostLostTimer = null; }
           renderLobby();
           break;
         case 'joined':
-          if (!players.has(msg.selfId)) { hostId = hostId || msg.selfId; }
           players.set(msg.selfId, msg.name);
+          if (msg.max) roomMax = msg.max;
+          if (msg.hostId) hostId = msg.hostId;
+          else hostId = hostId || msg.selfId;
+          if (msg.hostId === msg.selfId) { clearTimeout(hostLostTimer); hostLostTimer = null; }
           renderLobby();
           break;
-        case 'left':
+        case 'left': {
+          const wasHost = msg.selfId === hostId;
           players.delete(msg.selfId);
+          if (msg.max) roomMax = msg.max;
+          if (msg.hostId) hostId = msg.hostId;
           if (hostId === myId && startedFlag) {
-            if (lanState.collecting) handleHostSubmit({ selfId: msg.selfId, layers: [] });
+            if (lanState.collecting) handleHostSubmit({ selfId: msg.selfId, layers: [] }, true);
             if (lanState.voting) window.__lanHostVote({ selfId: msg.selfId, ups: [], downs: [], peak: null });
           }
-          if (hostId === msg.selfId) {
-            if (!startedFlag) {
-              // Noch in der Lobby: nächste:r Spieler:in wird Host
-              const next = [...players.keys()][0];
-              hostId = next ?? null;
-              renderLobby();
-            } else if (!leftGame) {
-              gameArea.innerHTML = '';
-              gameArea.append(el('div', { class: 'card', style: 'max-width:480px;margin:20px auto;text-align:center' },
-                el('p', { style: 'font-size:1.1rem;font-weight:700' }, '🫠 Der Host ist gegangen – die Partie endet.'),
-                el('button', { class: 'btn', style: 'margin-top:10px', onclick: () => leave() }, '← ' + t('spiel.final.home')),
-              ));
+          if (wasHost && startedFlag && !leftGame) {
+            // Der Host kann nach einem kurzen Verbindungsabbruch zurückkommen –
+            // erst nach einer Gnadenfrist gilt die Partie als beendet.
+            if (!hostLostTimer) {
+              toast(t('spiel.hostLost'), 4000);
+              hostLostTimer = setTimeout(() => {
+                hostLostTimer = null;
+                if (leftGame || players.has(hostId)) return;
+                startedFlag = false;
+                showHostLost();
+              }, 8000);
             }
-            return;
+            renderLobby();
+            break;
           }
           renderLobby();
           break;
+        }
         case 'start':
           startedFlag = true;
+          if (msg.hostId) hostId = msg.hostId;
           if (msg.hostId !== myId) announceStart(msg);
+          break;
+        case 'abort':
+          startedFlag = false;
+          renderAbort(msg.reason);
           break;
         case 'turn':
           // Alle erstellen parallel – nur der eigene Turn betrifft einen selbst
@@ -468,12 +592,13 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
           if (hostId === myId) hostHandleVote(msg);
           break;
         case 'voting-start':
-          if (msg.myId === myId) doVote(msg);
+          doVote(msg);
           break;
         case 'result':
           doResult(msg);
           break;
         case 'final':
+          startedFlag = false;
           doFinal(msg);
           break;
       }
@@ -484,16 +609,26 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
     sendOwnPack();
 
     // Host-Logik in derselben Closure – über Modulebene erreichbar:
-    function startFromLobby() { window.__lanHostStart(cfg, room, players, myId); }
+    function startFromLobby() {
+      if (startRequested || players.size < 2) return;
+      startRequested = true;
+      renderLobby();
+      window.__lanHostStart(cfg, room, players, myId);
+    }
+    window.__lanHostRematch = () => {
+      if (hostId !== myId || players.size < 2) return false;
+      window.__lanHostStart(cfg, room, new Map(players), myId);
+      return true;
+    };
     function hostHandleVote(msg) { window.__lanHostVote(msg); }
   });
 }
 
 // ---------- LAN Host/Guest-Phasen (auf Modulebene, da Closure-Shared-State nötig) ----------
-const lanState = { cfg: null, room: null, round: 0, rounds: 3, memes: [], votes: [], totals: new Map(), theme: null, players: [], assignments: new Map(), turnAdvance: null, voteAdvance: null, ownPacks: new Map(), collecting: false, voting: false, allMemes: [] }; // ownPacks: selfId -> [srv-Keys]
+const lanState = { cfg: null, room: null, myId: null, hostId: null, round: 0, rounds: 3, memes: [], votes: [], totals: new Map(), theme: null, players: [], assignments: new Map(), turnAdvance: null, voteAdvance: null, ownPacks: new Map(), collecting: false, voting: false, allMemes: [] }; // ownPacks: selfId -> [srv-Keys]
 
 /** Host: Caption aus einer „submit“-Nachricht in die laufende Runde übernehmen */
-export function handleHostSubmit(msg) {
+export function handleHostSubmit(msg, onlyIfMissing = false) {
   if (!lanState.collecting) return; // späte Captions nach Ablauf der Runde ignorieren
   if (!msg?.selfId) return;
   const top = String(msg.top ?? '').slice(0, 200);
@@ -501,7 +636,7 @@ export function handleHostSubmit(msg) {
   const layers = normLayers(msg.layers);
   const found = lanState.memes.find((m) => m.playerId === msg.selfId);
   if (found) {
-    found.top = top; found.bottom = bottom; found.layers = layers;
+    if (!onlyIfMissing) { found.top = top; found.bottom = bottom; found.layers = layers; }
     lanState.turnAdvance?.();
     return;
   }
@@ -514,7 +649,8 @@ export function handleHostSubmit(msg) {
 async function announceStart(msg) {
   lanState.cfg = msg.cfg;
   lanState.round = 0;
-  lanState.totals = new Map(msg.players.map((p) => [p.id, 0]));
+  const startPlayers = Array.isArray(msg.players) ? msg.players : [];
+  lanState.totals = new Map(startPlayers.map((p) => [p.id, 0]));
   const app = document.getElementById('app');
   app.innerHTML = '';
   app.append(el('div', { class: 'wrap phase-screen waiting' },
@@ -538,7 +674,7 @@ function doTurn(msg) {
     const rows = new Map();
 
     function addRow(layer) {
-      const inp = el('textarea', { rows: 2, placeholder: t('spiel.turn.field', { n: rows.size + 1 }) });
+      const inp = el('textarea', { rows: 2, maxlength: 200, placeholder: t('spiel.turn.field', { n: rows.size + 1 }) });
       const row = el('div', { style: 'display:flex;gap:6px;align-items:flex-start;margin-bottom:8px' },
         inp,
         el('button', { class: 'btn btn-sm btn-red', type: 'button', title: t('pakete.delTpl'), onclick: () => { mc.removeLayer(layer.id); row.remove(); rows.delete(layer.id); } }, '🗑'),
@@ -555,8 +691,8 @@ function doTurn(msg) {
     const base = Math.min(mc.cw, mc.ch);
     const z = zoneFor(tpl.id);
     const def = (y) => ({ y, fontSize: Math.round(base * 0.11), strokeWidth: Math.max(5, Math.round(base * 0.012)) });
-    addRow(mc.addLayer({ text: '', ...(layerPatch(mc, z?.top) || def(Math.round(base * 0.13))) }));
-    addRow(mc.addLayer({ text: '', ...(layerPatch(mc, z?.bottom) || def(mc.ch - Math.round(base * 0.13))) }));
+    addRow(mc.addLayer({ text: '', ...(layerPatch(mc, z?.top) || def(Math.round(base * 0.15))) }));
+    addRow(mc.addLayer({ text: '', ...(layerPatch(mc, z?.bottom) || def(mc.ch - Math.round(base * 0.15))) }));
 
     const timerWrap = el('div', { class: 'timerbar' }, el('i'));
 
@@ -566,6 +702,7 @@ function doTurn(msg) {
       const room = lanState.room;
       const layers = mc.layers.map((l) => ({ text: String(l.text).slice(0, 200), xF: +(l.x / mc.cw).toFixed(3), yF: +(l.y / mc.ch).toFixed(3), fsF: +(l.fontSize / base).toFixed(3) }));
       room.send({ type: 'submit', selfId: room.selfId, layers });
+      mc.destroy(); // Canvas-Blob freigeben; gerendert ist bereits alles
     }
 
     app.innerHTML = '';
@@ -576,7 +713,7 @@ function doTurn(msg) {
         el('p', { style: 'color:var(--muted);font-size:0.85rem' }, t('spiel.turn.place')),
         fieldsWrap,
         el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
-          el('button', { class: 'btn btn-sm', type: 'button', onclick: () => addRow(mc.addLayer({ text: '' })) }, '+ ' + t('studio.addLayer')),
+          el('button', { class: 'btn btn-sm', type: 'button', onclick: () => { const layer = mc.addLayer({ text: '' }); addRow(layer); const inp = rows.get(layer.id); inp?.focus(); } }, '+ ' + t('studio.addLayer')),
           el('button', {
             class: 'btn btn-sm', type: 'button',
             onclick: () => {
@@ -595,7 +732,7 @@ function doTurn(msg) {
     ));
     window.scrollTo(0, 0);
 
-    const leftSec = Math.max(1, Math.round((msg.until - Date.now()) / 1000));
+    const leftSec = Math.max(1, Math.round((Number(msg.until) - Date.now()) / 1000) || 90);
     const startedAt = Date.now();
     const iv = setInterval(() => {
       if (settled) return clearInterval(iv);
@@ -629,7 +766,9 @@ function doVote(msg) {
   if (msg.tpls) Object.assign(window.__lanTpls = window.__lanTpls || {}, msg.tpls);
   const app = document.getElementById('app');
   const room = lanState.room;
-  const list = msg.memes.filter((m) => m.playerId !== msg.myId);
+  const myId = msg.myId || room?.selfId;
+  const memes = Array.isArray(msg.memes) ? msg.memes : [];
+  const list = memes.filter((m) => m.playerId !== myId);
 
   if (!list.length) {
     // Keine fremden Memes: sofort leer abstimmen, sonst wartet der Host bis zum Timeout.
@@ -646,9 +785,9 @@ function doVote(msg) {
     return;
   }
 
-  // shortcut: festes Zeitbudget pro Meme (max. 50 s gesamt), damit auch 45-s-Runden
-  // vor dem Host-Vote-Timeout fertig werden; bei Bedarf Zeit aus voting-start mitgeben.
-  const perMeme = Math.max(4, Math.min(10, Math.floor(50 / list.length)));
+  // Zeitbudget kommt vom Host und skaliert mit der Spielerzahl; Fallback für alte Peers.
+  const voteSec = Math.max(20, Number(msg.voteSec) || 50);
+  const perMeme = Math.max(3, Math.min(10, Math.floor(voteSec / list.length)));
   const ups = new Set(), downs = new Set(), decided = new Set();
   let peak = null; // einmal pro Runde, bis zum Abgeben auf ein anderes Meme verschiebbar
   let sent = false, idx = 0, timer = null, autoTimer = null, showSeq = 0;
@@ -719,7 +858,7 @@ function doVote(msg) {
     }, 250);
   }
 
-  // Nach Up/Down-Vote kurz warten (450 ms), dann weiter – nie doppelt, nie am Ende.
+  // Nach Up/Down-Vote kurz warten, dann weiter – so bleibt Zeit für den PEAK.
   function scheduleAdvance() {
     clearTimeout(autoTimer);
     if (sent || idx >= list.length - 1) return;
@@ -727,7 +866,7 @@ function doVote(msg) {
       autoTimer = null;
       if (sent || !img.isConnected || idx >= list.length - 1) return;
       go(1);
-    }, 450);
+    }, 1000);
   }
 
   function go(delta) {
@@ -752,8 +891,11 @@ function doVote(msg) {
   });
   pkB.addEventListener('click', () => {
     if (sent) return;
+    clearTimeout(autoTimer); // PEAK-Klick hält das aktuelle Meme fest
+    autoTimer = null;
     peak = peak === list[idx].playerId ? null : list[idx].playerId;
     paint();
+    if (decided.has(list[idx].playerId)) scheduleAdvance();
   });
 
   function decide(advance = false) {
@@ -768,7 +910,7 @@ function doVote(msg) {
   app.append(el('div', { class: 'wrap phase-screen vote-screen' },
     el('h1', {}, t('spiel.vote.title')),
     el('div', { class: 'card turn-box vote-card-live' },
-      el('p', { class: 'vote-hint' }, t('spiel.vote.hint')),
+      el('p', { class: 'vote-hint' }, t('spiel.vote.hint'), el('br'), '💡 ' + t('spiel.vote.peakFirst')),
       img,
       meta,
       el('div', { class: 'vote-btns vote-btns-live' }, upB, dnB, pkB),
@@ -785,19 +927,31 @@ function doVote(msg) {
 }
 
 function doResult(msg) {
+  if (msg.tpls) Object.assign(window.__lanTpls = window.__lanTpls || {}, msg.tpls);
   const app = document.getElementById('app');
+  const scores = Array.isArray(msg.scores) ? msg.scores : [];
   const isFinal = msg.round >= msg.rounds;
+  const maxPts = scores.length ? Math.max(...scores.map((x) => x.pts)) : 0;
   const rows = el('div', { class: 'result-list' });
-  for (const s of msg.scores) {
+  for (const s of scores) {
     const img = el('img', { alt: s.name });
+    const saveBtn = el('button', { class: 'btn btn-sm result-save', type: 'button', disabled: true, title: t('spiel.saveMeme'), 'aria-label': t('spiel.saveMeme') }, '⬇ ' + t('spiel.saveMeme'));
     (async () => {
       const tpl = await resolveTpl(s.tplKey);
-      if (tpl) img.src = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: s.top, bottom: s.bottom, layers: s.layers });
+      if (!tpl) return;
+      const url = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: s.top, bottom: s.bottom, layers: s.layers }, 720);
+      img.src = url;
+      saveBtn.disabled = false;
+      saveBtn.addEventListener('click', () => downloadImage(url, s.name));
     })();
-    rows.append(el('div', { class: `result-row${s.pts === Math.max(...msg.scores.map((x) => x.pts)) && s.pts > 0 ? ' winner' : ''}` },
+    rows.append(el('div', { class: `result-row${s.pts === maxPts && s.pts > 0 ? ' winner' : ''}` },
       img,
-      el('div', {}, el('div', { style: 'font-weight:800' }, s.name), el('div', { class: 'voters' },
-        [s.up?.length ? '👍 ' + s.up.join(', ') : null, s.down?.length ? '👎 ' + s.down.join(', ') : null, s.peaks ? '⛰️ ×' + s.peaks : null].filter(Boolean).join('  ·  ') || '—')),
+      el('div', {},
+        el('div', { style: 'font-weight:800' }, s.name),
+        el('div', { class: 'voters' },
+          [s.up?.length ? '👍 ' + s.up.join(', ') : null, s.down?.length ? '👎 ' + s.down.join(', ') : null, s.peaks ? '⛰️ ×' + s.peaks : null].filter(Boolean).join('  ·  ') || '—'),
+        saveBtn,
+      ),
       el('div', { class: 'pts' }, String(s.pts)),
     ));
   }
@@ -828,24 +982,38 @@ function doResult(msg) {
 }
 
 function doFinal(msg) {
+  if (msg.tpls) Object.assign(window.__lanTpls = window.__lanTpls || {}, msg.tpls);
   confetti();
   const app = document.getElementById('app');
   const medals = ['🥇', '🥈', '🥉'];
-  const bestCard = msg.best?.length ? el('div', { class: 'card', style: 'margin-top:14px' },
+  const standings = Array.isArray(msg.standings) ? msg.standings : [];
+  const best = Array.isArray(msg.best) ? msg.best : [];
+  const bestCard = best.length ? el('div', { class: 'card', style: 'margin-top:14px' },
     el('h2', {}, '🔥 ' + t('spiel.final.best')),
     el('div', { class: 'vote-grid' },
-      ...msg.best.map((m) => {
+      ...best.map((m) => {
         const img = el('img', { alt: m.name });
+        const saveBtn = el('button', { class: 'btn btn-sm', type: 'button', disabled: true, title: t('spiel.saveMeme'), 'aria-label': t('spiel.saveMeme') }, '⬇');
         (async () => {
           const tpl = await resolveTpl(m.tplKey);
-          if (tpl) img.src = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom, layers: m.layers });
+          if (!tpl) return;
+          const url = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom, layers: m.layers }, 720);
+          img.src = url;
+          saveBtn.disabled = false;
+          saveBtn.addEventListener('click', () => downloadImage(url, m.name));
         })();
-        return el('div', { class: 'vote-card' }, img, el('div', { class: 'vote-meta' }, m.name, ' · ' + m.pts + ' P.'));
+        return el('div', { class: 'vote-card' }, img,
+          el('div', { class: 'vote-meta' },
+            el('span', {}, m.name + ' · ' + t('spiel.points', { n: m.pts })),
+            saveBtn,
+          ),
+        );
       }),
     ),
   ) : null;
 
-  // Zurück zur Startseite/Lobby und den Raum sauber schließen.
+  // Host startet eine neue Partie mit denselben Leuten; Gäste gehen zurück zur Lobby.
+  const isHost = !!lanState.room && lanState.room.selfId === lanState.hostId;
   function replay() {
     lanState.room?.close();
     lanState.room = null;
@@ -856,20 +1024,22 @@ function doFinal(msg) {
 
   app.innerHTML = '';
   app.append(el('div', { class: 'wrap phase-screen' },
-    el('h1', {}, '👑 ' + t('spiel.final.title')),
+    el('h1', {}, t('spiel.final.title')),
     el('div', { class: 'card' },
-      el('h2', {}, '🏆 ' + t('spiel.final.podium')),
+      el('h2', {}, msg.relaxed ? '🎉 ' + t('spiel.final.relaxed') : '🏆 ' + t('spiel.final.podium')),
       el('div', { class: 'final-rank' },
-        ...msg.standings.map((s, i) => el('div', { class: `final-row${i === 0 ? ' first' : ''}` },
-          el('span', { class: 'medal' }, i < 3 ? medals[i] : `${i + 1}.`),
+        ...standings.map((s, i) => el('div', { class: `final-row${i === 0 && !msg.relaxed ? ' first' : ''}` },
+          el('span', { class: 'medal' }, msg.relaxed ? '🎉' : i < 3 ? medals[i] : `${i + 1}.`),
           s.name,
-          el('span', { class: 'pts' }, String(s.pts) + (msg.relaxed ? '' : ' P.')),
+          msg.relaxed ? null : el('span', { class: 'pts' }, t('spiel.points', { n: s.pts })),
         )),
       ),
     ),
     bestCard,
     el('div', { class: 'final-actions' },
-      el('button', { class: 'btn btn-primary', type: 'button', onclick: replay }, '🔁 ' + t('spiel.final.again')),
+      isHost
+        ? el('button', { class: 'btn btn-primary', type: 'button', onclick: () => { if (!window.__lanHostRematch?.()) replay(); } }, '🔁 ' + t('spiel.final.again'))
+        : el('button', { class: 'btn btn-primary', type: 'button', onclick: replay }, '← ' + t('spiel.final.home')),
     ),
   ));
   window.scrollTo(0, 0);
@@ -879,6 +1049,7 @@ function doFinal(msg) {
 window.__lanHostStart = function (cfg, room, playersMap, myId) {
   lanState.cfg = cfg;
   lanState.room = room;
+  lanState.hostId = myId;
   lanState.rounds = cfg.rounds;
   lanState.totals = new Map([...playersMap.keys()].map((id) => [id, 0]));
   lanState.allMemes = [];
@@ -896,23 +1067,47 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
     const theme = cfg.mode === 'theme' ? themes[(r * 7) % themes.length] : null;
     lanState.theme = theme;
     let tplKeys;
-    try { tplKeys = await pickTemplates(playerList.length, cfg.mode, playerList.map((p) => p.id), cfg.ownPacks ? lanState.ownPacks : null); } catch (e) { toast(e.message); return; }
+    try {
+      tplKeys = await pickTemplates(playerList.length, cfg.mode, playerList.map((p) => p.id), cfg.ownPacks ? lanState.ownPacks : null);
+    } catch (e) {
+      const reason = String(e.message || e);
+      room.send({ type: 'abort', reason });
+      renderAbort(reason);
+      return;
+    }
     lanState.assignments = new Map(playerList.map((p, i) => [p.id, tplKeys[i]]));
 
-    // DataURLs für Gäste
+    // Templates: eingebaute Bilder haben alle Clients lokal; nur eigene/Server-
+    // Templates müssen als DataURL mitgeschickt werden (schont Zeit und WS-Budget).
     const tpls = {};
+    let missingTpl = 0;
     for (const k of new Set(tplKeys)) {
+      if (String(k).startsWith('builtin_')) continue;
       const tpl = await resolveTpl(k);
-      if (tpl) tpls[k] = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: '', bottom: '' }, 900);
+      if (tpl) tpls[k] = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: '', bottom: '' }, 720);
+      else missingTpl++;
+    }
+    if (missingTpl) {
+      const reason = t('spiel.templatesFailed');
+      room.send({ type: 'abort', reason });
+      renderAbort(reason);
+      return;
+    }
+    if (Object.values(tpls).reduce((n, s) => n + s.length, 0) > 6 * 1024 * 1024) {
+      const reason = t('spiel.packsTooBig');
+      room.send({ type: 'abort', reason });
+      renderAbort(reason);
+      return;
     }
 
     // Turn-Phase: alle erstellen parallel, gemeinsames Zeitfenster
     const until = Date.now() + cfg.timeSec * 1000;
     lanState.collecting = true;
     for (let i = 0; i < playerList.length; i++) {
+      const ownTpl = tpls[tplKeys[i]] ? { [tplKeys[i]]: tpls[tplKeys[i]] } : null;
       room.send({
         type: 'turn', playerId: playerList[i].id, name: playerList[i].name, round: r,
-        theme, tplKey: tplKeys[i], tpls, until,
+        theme, tplKey: tplKeys[i], tpls: ownTpl, until,
       });
     }
     let turnDone = false;
@@ -920,6 +1115,7 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
       if (turnDone) return;
       turnDone = true;
       lanState.collecting = false;
+      lanState.turnAdvance = null;
       clearTimeout(turnTimer);
       for (const p of playerList) {
         if (!lanState.memes.some((m) => m.playerId === p.id)) {
@@ -936,20 +1132,21 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
 
     function startVoting() {
       const memes = lanState.memes.map((m) => ({ playerId: m.playerId, name: m.name, top: m.top, bottom: m.bottom, layers: m.layers, tplKey: m.tplKey }));
-      // Alle voten gleichzeitig
+      // Alle voten gleichzeitig; die Zeit wächst mit der Zahl der Memes.
+      const voteSec = Math.min(300, Math.max(30, 30 + playerList.length * 6));
       lanState.voting = true;
-      for (const v of playerList) {
-        room.send({ type: 'voting-start', myId: v.id, memes, tpls });
-      }
+      // Eine gemeinsame Nachricht für alle – jede:r filtert das eigene Meme heraus.
+      room.send({ type: 'voting-start', memes, tpls, voteSec });
       let voteDone = false;
       const finishVote = () => {
         if (voteDone) return;
         voteDone = true;
         lanState.voting = false;
+        lanState.voteAdvance = null;
         for (const v of playerList) if (!lanState.votes.some((x) => x.selfId === v.id)) lanState.votes.push({ selfId: v.id, ups: [], downs: [], peak: null });
         tally();
       };
-      setTimeout(finishVote, (cfg.timeSec + 20) * 1000);
+      setTimeout(finishVote, (voteSec + 15) * 1000);
       // Wenn alle abgestimmt haben, Auswertung sofort
       lanState.voteAdvance = () => {
         if (playerList.every((p) => lanState.votes.some((x) => x.selfId === p.id))) finishVote();
@@ -1004,8 +1201,15 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
 
 window.__lanHostVote = function (msg) {
   if (!lanState.voting) return; // späte Stimmen nach der Auswertung ignorieren
-  if (!lanState.votes.some((v) => v.selfId === msg.selfId)) {
-    lanState.votes.push({ selfId: msg.selfId, ups: msg.ups || [], downs: msg.downs || [], peak: msg.peak || null });
-  }
+  if (!msg?.selfId || !lanState.players.some((p) => p.id === msg.selfId)) return;
+  // Nur echte Mitspieler:innen, niemals die eigene Karte, keine Duplikate.
+  const valid = new Set(lanState.players.map((p) => p.id));
+  const clean = (arr) => [...new Set(Array.isArray(arr) ? arr : [])]
+    .filter((id) => typeof id === 'string' && valid.has(id) && id !== msg.selfId);
+  const peak = typeof msg.peak === 'string' && valid.has(msg.peak) && msg.peak !== msg.selfId ? msg.peak : null;
+  const vote = { selfId: msg.selfId, ups: clean(msg.ups), downs: clean(msg.downs), peak };
+  const existing = lanState.votes.find((v) => v.selfId === msg.selfId);
+  if (existing) Object.assign(existing, vote);
+  else lanState.votes.push(vote);
   lanState.voteAdvance?.();
 };

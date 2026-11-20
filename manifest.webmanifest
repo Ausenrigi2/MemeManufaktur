@@ -1,6 +1,6 @@
 {
   "name": "MemeManufaktur",
-  "short_name": "MemeMacher",
+  "short_name": "MemeManufaktur",
   "description": "Selbst gehostetes Meme-Partyspiel mit Studio, eigenen Paketen und Lobbys.",
   "start_url": "./",
   "scope": "./",

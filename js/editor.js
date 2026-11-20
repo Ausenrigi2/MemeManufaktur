@@ -44,10 +44,15 @@ export class MemeCanvas {
   async setImage(blobOrUrl, name = '') {
     const url = blobOrUrl instanceof Blob ? URL.createObjectURL(blobOrUrl) : blobOrUrl;
     const img = new Image();
-    await new Promise((res, rej) => {
-      img.onload = res; img.onerror = rej;
-      img.src = url;
-    });
+    try {
+      await new Promise((res, rej) => {
+        img.onload = res; img.onerror = rej;
+        img.src = url;
+      });
+    } catch (e) {
+      if (blobOrUrl instanceof Blob) URL.revokeObjectURL(url);
+      throw e;
+    }
     if (this._url) URL.revokeObjectURL(this._url);
     this._url = blobOrUrl instanceof Blob ? url : null;
     this.image = img;
@@ -57,6 +62,16 @@ export class MemeCanvas {
     this.name = name;
     this._recomputeSize();
     this.render();
+  }
+
+  destroy() {
+    if (this._url) URL.revokeObjectURL(this._url);
+    this._url = null;
+    this.image = null;
+    this.layers = [];
+    this.selectedId = null;
+    this.onChange = null;
+    this.onSelect = null;
   }
 
   addLayer(patch = {}) {
@@ -126,19 +141,30 @@ export class MemeCanvas {
 
   // ---------- Text-Layout ----------
   _wrapText(ctx, text, maxWidth) {
-    const words = String(text).replace(/\r/g, '').split(/(\s+)/).filter((w) => w.length);
+    const paragraphs = String(text).replace(/\r/g, '').split('\n');
     const lines = [];
-    let cur = '';
-    for (const w of words) {
-      if (/^\n?$/.test(w)) {
-        if (cur.trim()) { lines.push(cur.trim()); cur = ''; } else if (lines.length) { /* Leerzeile ignorieren */ }
+    for (const para of paragraphs) {
+      const words = para.split(/\s+/).filter(Boolean);
+      if (!words.length) {
+        if (lines.length) lines.push(''); // bewusste Leerzeile
         continue;
       }
-      const test = cur ? cur + ' ' + w : w;
-      if (ctx.measureText(test).width > maxWidth && cur) { lines.push(cur); cur = w; }
-      else cur = test;
+      let cur = '';
+      for (const w of words) {
+        const test = cur ? cur + ' ' + w : w;
+        if (ctx.measureText(test).width <= maxWidth) { cur = test; continue; }
+        if (cur) { lines.push(cur); cur = ''; }
+        if (ctx.measureText(w).width <= maxWidth) { cur = w; continue; }
+        // Einzelnes Überlanges Wort zeichenweise umbrechen, statt aus dem Bild zu laufen.
+        let chunk = '';
+        for (const ch of w) {
+          if (chunk && ctx.measureText(chunk + ch).width > maxWidth) { lines.push(chunk); chunk = ch; }
+          else chunk += ch;
+        }
+        cur = chunk;
+      }
+      if (cur) lines.push(cur);
     }
-    if (cur.trim()) lines.push(cur.trim());
     return lines;
   }
 
@@ -221,12 +247,21 @@ export class MemeCanvas {
     cv.addEventListener('pointerdown', (e) => {
       const p = this._point(e);
       const layer = this.hitTest(p.x, p.y);
-      this.select(layer ? layer.id : null);
-      if (layer) {
-        this._dragging = { id: layer.id, dx: p.x - layer.x, dy: p.y - layer.y };
+      if (!layer) {
+        // Klick in die freie Fläche setzt die ausgewählte Ebene dorthin –
+        // wichtig für leere Textfelder, die noch keine Trefferfläche haben.
+        const sel = this.selected();
+        if (!sel) { this.select(null); return; }
+        this.updateLayer(sel.id, { x: Math.max(10, Math.min(this.cw - 10, p.x)), y: Math.max(10, Math.min(this.ch - 10, p.y)) });
+        this._dragging = { id: sel.id, dx: 0, dy: 0 };
         cv.setPointerCapture(e.pointerId);
         cv.style.cursor = 'grabbing';
+        return;
       }
+      this.select(layer.id);
+      this._dragging = { id: layer.id, dx: p.x - layer.x, dy: p.y - layer.y };
+      cv.setPointerCapture(e.pointerId);
+      cv.style.cursor = 'grabbing';
     });
     cv.addEventListener('pointermove', (e) => {
       if (!this._dragging) return;
@@ -270,34 +305,42 @@ export class MemeCanvas {
 export async function renderMemeToDataUrl({ blob, top = '', bottom = '', id = '', layers = null }, width = 480) {
   const canvas = document.createElement('canvas');
   const mc = new MemeCanvas(canvas);
-  await mc.setImage(blob);
-  const base = Math.min(mc.cw, mc.ch);
-  const fs = Math.round(base * 0.11);
-  const z = zoneFor(id);
-  const norm = normLayers(layers);
-  if (norm.length) {
-    for (const l of norm) {
-      const lfs = Math.round(base * l.fsF);
-      mc.addLayer({ text: l.text, x: Math.round(mc.cw * l.xF), y: Math.round(mc.ch * l.yF), fontSize: lfs, strokeWidth: Math.max(4, Math.round(lfs / 9)) });
-    }
-    mc.selectedId = null;
-  } else {
-    const topText = String(top).trim();
-    const botText = String(bottom).trim();
-    if (topText) {
-      mc.addLayer({ text: topText, ...(layerPatch(mc, z?.top) || { y: Math.round(base * 0.13), fontSize: fs, strokeWidth: Math.max(4, Math.round(fs / 9)) }) });
+  try {
+    await mc.setImage(blob);
+    const base = Math.min(mc.cw, mc.ch);
+    const fs = Math.round(base * 0.11);
+    const z = zoneFor(id);
+    const norm = normLayers(layers);
+    if (norm.length) {
+      for (const l of norm) {
+        const lfs = Math.round(base * l.fsF);
+        mc.addLayer({ text: l.text, x: Math.round(mc.cw * l.xF), y: Math.round(mc.ch * l.yF), fontSize: lfs, strokeWidth: Math.max(4, Math.round(lfs / 9)) });
+      }
       mc.selectedId = null;
+    } else {
+      const topText = String(top).trim();
+      const botText = String(bottom).trim();
+      if (topText) {
+        mc.addLayer({ text: topText, ...(layerPatch(mc, z?.top) || { y: Math.round(base * 0.15), fontSize: fs, strokeWidth: Math.max(4, Math.round(fs / 9)) }) });
+        mc.selectedId = null;
+      }
+      if (botText) {
+        mc.addLayer({ text: botText, ...(layerPatch(mc, z?.bottom) || { y: mc.ch - Math.round(base * 0.15), fontSize: fs, strokeWidth: Math.max(4, Math.round(fs / 9)) }) });
+      }
     }
-    if (botText) {
-      mc.addLayer({ text: botText, ...(layerPatch(mc, z?.bottom) || { y: mc.ch - Math.round(base * 0.13), fontSize: fs, strokeWidth: Math.max(4, Math.round(fs / 9)) }) });
-    }
-  }
-  mc.render();
-  return mc.toBlob('image/jpeg', 0.85).then((b) => {
-    return new Promise((res) => {
+    mc.render();
+    const out = document.createElement('canvas');
+    const k = width && canvas.width > width ? width / canvas.width : 1;
+    out.width = Math.max(1, Math.round(canvas.width * k));
+    out.height = Math.max(1, Math.round(canvas.height * k));
+    out.getContext('2d').drawImage(canvas, 0, 0, out.width, out.height);
+    const b = await new Promise((res) => out.toBlob(res, 'image/jpeg', 0.85));
+    return await new Promise((res) => {
       const fr = new FileReader();
       fr.onload = () => res(fr.result);
       fr.readAsDataURL(b);
     });
-  });
+  } finally {
+    mc.destroy();
+  }
 }
