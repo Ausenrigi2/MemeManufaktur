@@ -1,5 +1,5 @@
 // ============ Pakete-Seite ============
-import { el, t, toast } from './lib.js';
+import { el, t, toast, uid } from './lib.js';
 import { Packs, ServerAPI } from './packs.js';
 
 // Eigene Styles, ohne styles.css anzufassen (index.html bleibt unverändert).
@@ -118,6 +118,63 @@ export function openPacks() {
     dropzone, dzInput,
   );
 
+  // ---------- Direkt auf den Server ----------
+  const serverDropzone = el('div', { class: 'dropzone server-dropzone', role: 'button', tabindex: 0 },
+    '☁️ ' + t('pakete.serverDrop'),
+  );
+  const serverInput = el('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true });
+  const serverUploadCard = el('div', { class: 'card packs-upload server-upload' },
+    el('h2', {}, '🌐 ' + t('pakete.serverUpload')),
+    el('p', { class: 'packs-sub' }, t('pakete.serverUploadLead')),
+    el('p', { class: 'packs-sub server-upload-hint' }, t('pakete.serverUploadHint')),
+    serverDropzone, serverInput,
+  );
+  let serverUploading = false;
+
+  function setServerBusy(busy) {
+    serverUploading = busy;
+    serverDropzone.classList.toggle('busy', busy);
+    serverDropzone.setAttribute('aria-busy', String(busy));
+    serverDropzone.setAttribute('aria-disabled', String(busy));
+    serverDropzone.tabIndex = busy ? -1 : 0;
+    serverInput.disabled = busy;
+  }
+
+  async function uploadDirectToServer(fileList) {
+    if (serverUploading) return;
+    const files = [...fileList].filter((f) => !f.type || f.type.startsWith('image/'));
+    if (!files.length) { toast('⚠️ ' + t('pakete.uploadNoImages')); return; }
+    setServerBusy(true);
+    toast(t('pakete.serverUploading', { n: files.length }), 60000);
+    let ok = 0;
+    try {
+      for (const file of files) {
+        const id = uid('tpl');
+        const name = file.name.replace(/\.[^.]+$/, '') || t('pakete.serverUpload');
+        await ServerAPI.upload({ id, name, blob: file, mime: file.type || 'image/png', shared: true });
+        ok++;
+      }
+      toast(t('pakete.serverUploaded', { n: ok }));
+      await refresh();
+    } catch (e) {
+      console.error(e);
+      toast('⚠️ ' + t('pakete.serverUploadFailed'));
+    } finally {
+      setServerBusy(false);
+      serverInput.value = '';
+    }
+  }
+
+  const openServerPicker = () => { if (!serverUploading) serverInput.click(); };
+  serverDropzone.addEventListener('click', openServerPicker);
+  serverDropzone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openServerPicker(); }
+  });
+  ['dragover', 'dragenter'].forEach((ev) => serverDropzone.addEventListener(ev, (e) => { e.preventDefault(); serverDropzone.classList.add('drag'); }));
+  ['dragleave', 'drop'].forEach((ev) => serverDropzone.addEventListener(ev, (e) => { e.preventDefault(); serverDropzone.classList.remove('drag'); }));
+  serverDropzone.addEventListener('drop', (e) => uploadDirectToServer(e.dataTransfer.files));
+  serverInput.addEventListener('change', () => uploadDirectToServer(serverInput.files));
+
   function setBusy(busy) {
     uploading = busy;
     dropzone.classList.toggle('busy', busy);
@@ -235,13 +292,13 @@ export function openPacks() {
 
   // ---------- Account (optional – nur mit Server) ----------
   function accountSection(info) {
-    const card = el('div', { class: 'card account' }, el('h2', {}, '👤 ' + t('account.title')));
-    if (!ServerAPI.available) { card.append(el('p', { style: 'color:var(--muted)' }, t('account.needserver'))); return card; }
-    if (!info) {
+    const body = el('div', { class: 'account-body' });
+    if (!ServerAPI.available) { body.append(el('p', { style: 'color:var(--muted)' }, t('account.needserver'))); }
+    else if (!info) {
       const email = el('input', { type: 'email', name: 'email', autocomplete: 'email', spellcheck: false, placeholder: 'you@example.com…' });
       const pw = el('input', { type: 'password', name: 'password', autocomplete: 'new-password', minlength: 8 });
       const act = async (fn) => { try { await fn.call(ServerAPI, email.value.trim(), pw.value); refresh(); } catch (e) { toast('⚠️ ' + e.message); } };
-      card.append(
+      body.append(
         el('p', { style: 'color:var(--muted)' }, t('account.lead')),
         el('div', { class: 'fieldrow' },
           el('div', { class: 'grow' }, el('label', {}, t('account.email')), email),
@@ -255,7 +312,7 @@ export function openPacks() {
     } else {
       const pct = Math.min(100, Math.round((info.used / info.quota) * 100));
       const mb = (n) => (n / (1024 * 1024)).toFixed(n < 1048576 ? 1 : 0);
-      card.append(
+      body.append(
         el('p', {}, t('account.who', { email: info.user.email })),
         el('div', { class: 'quota' },
           el('div', { class: 'quota-track', role: 'meter', 'aria-valuemin': 0, 'aria-valuemax': info.quota, 'aria-valuenow': info.used, 'aria-label': t('account.quota', { used: mb(info.used), max: mb(info.quota) }) },
@@ -268,7 +325,10 @@ export function openPacks() {
         ),
       );
     }
-    return card;
+    return el('details', { class: 'card account' },
+      el('summary', {}, '👤 ' + (info ? info.user.email : t('account.summary'))),
+      body,
+    );
   }
 
   function packTemplates(pack) {
@@ -486,6 +546,7 @@ export function openPacks() {
       el('p', { class: 'packs-lead' }, t('pakete.lead')),
       toolbar,
       accountHost,
+      ServerAPI.available ? serverUploadCard : null,
       uploadCard,
       listWrap,
       serverWrap,

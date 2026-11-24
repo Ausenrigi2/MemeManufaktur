@@ -5,14 +5,18 @@ A self-hostable **meme party game** — your instance, your design, your data:
 - 🖌️ **Meme Studio** — visual template gallery, drag & scale text, outline,
   highlight, image filters, keyboard shortcuts, PNG/JPEG export and clipboard
   copy. Everything renders locally in your browser.
-- 📦 **Your own meme packs** — upload pictures, organize them into packs, search
-  them and use them in the studio and in the game. Stored in your browser
-  (IndexedDB) or, when the server is running, shared with everyone on the
-  network. The shared library loads in pages instead of all at once.
+- ☁️ **Server template library** — no bundled meme images. Upload your own
+  pictures directly to the server; they immediately show up in the studio and
+  in every game on the network. Uploads can be managed or deleted with an
+  account.
+- 📦 **Your own meme packs** — upload pictures locally, organize them into
+  packs, search them and use them in the studio and game. In a LAN match the
+  host can allow players to attach their own packs.
 - 🎉 **Party mode** — quick play or a private lobby, everyone joins in their own
   browser: 1–8 rounds, themes, captions, voting and a meme-king coronation.
   Public lobbies can be joined from an open list; private ones work by code
-  only. Invite code and link are one click away.
+  only. Invite code and link are one click away. Every round ends in a review
+  with per-meme downloads; the finale packs all memes into one ZIP.
 - 👤 **Accounts (optional)** — sign up with email + password, no verification.
   Each account gets its own server storage up to **250 MB**; in a LAN match,
   the host can allow players to attach their own packs.
@@ -51,11 +55,16 @@ npm start
 ```bash
 docker compose up -d --build
 # → http://localhost:8080
+
+# other host port:
+MEME_PORT=8090 docker compose up -d --build
+# → http://localhost:8090
 ```
 
-Uploads persist in the named volume `meme-data` (mounted at `/app/data`). The
-image runs as the non-root `node` user and ships a `/health` check; a
-`.dockerignore` keeps uploads, git history and tests out of the build context.
+The compose file is included (`docker-compose.yml`). Uploads persist in the
+named volume `meme-data` (mounted at `/app/data`). The image runs as the
+non-root `node` user and ships a `/health` check; a `.dockerignore` keeps
+uploads, git history and tests out of the build context.
 
 ### 3) Static only (offline)
 
@@ -75,11 +84,20 @@ in your browser.
    **Private game** (code only). Public lobbies show up in the list with
    player counts; the invite code and link are copyable in the lobby.
 2. Everyone joins in their own browser; the first person in is the host.
-3. The host picks 1–8 rounds, a mode and the time per round, then starts:
-   each player writes a caption for their template — against the clock.
-4. Everyone votes for the best memes; the next meme follows automatically
-   after a vote. Points flow, and after the final round a meme royalty is
-   crowned. Confetti included.
+3. The host picks 1–8 rounds, a mode, the time per round and whether the
+   review continues automatically or waits for the host, then starts: each
+   player writes a caption for their template — against the clock. A **new
+   template** button rerolls to another random image at any time.
+   Templates come from the server library, so upload a few pictures on the
+   Packs page before the first game.
+4. After every caption is in (or the timer runs out), all players see the same
+   randomly ordered memes, one per 10 seconds. Upvote (**Krocha**), peak,
+   downvote (**Gschissn**) or stay neutral (**Najo**) — your own meme is
+   greyed out for you.
+5. Each round ends in a review with all memes sorted by points and a download
+   button per meme. The host (or the auto timer) starts the next round. The
+   finale shows every meme of the game and downloads them all as one ZIP.
+   Confetti included.
 
 The server only **relays messages** (and keeps the lobby list); all game
 logic runs client-side.
@@ -89,12 +107,14 @@ logic runs client-side.
 | Mode | Storage |
 | --- | --- |
 | Local (browser) | IndexedDB — only you can see them |
-| Shared (server) | `./data/uploads/` + index `./data/library.json` |
+| Server (direct upload) | `./data/uploads/` + index `./data/library.json`; used by the studio and every game |
 | With an account | Server storage per account (up to 250 MB); private entries stay out of the public library and away from anonymous visitors, but signed-in players on the same server can load them by ID for LAN games. Accounts need the Node server |
 
-"Also save to server" ("Auch auf dem Server speichern") is off by default and
-can be toggled per upload on the Packs page. In LAN matches, the host can allow
-players to use their own (private) packs.
+The Packs page has a **“Upload directly to the server”** dropzone. Those
+pictures are immediately part of the shared template pool used by the studio
+and the game. The older “Also save to server” checkbox is still available when
+uploading a local pack. If the server library is empty, the game asks the host
+to upload templates first.
 
 ## HTTP API & WebSocket
 
@@ -107,7 +127,7 @@ players to use their own (private) packs.
 | `/api/library` | GET | Shared templates + your own, sorted by votes (private entries only for their owner) |
 | `/api/vote` | POST | Toggle your upvote on an entry (JSON: `id`; needs a session) |
 | `/api/lobbies` | GET | Open public lobbies (`code`, `name`, `players`) |
-| `/api/upload` | POST | Create/update a template (JSON: `id`, `name`, `mime`, `data` as base64) |
+| `/api/upload` | POST | Create/update a template (JSON: `id`, `name`, `mime`, `data` as base64; `shared: true` makes an account upload public) |
 | `/api/library/:id` | DELETE | Remove a template (own entries only by their owner) |
 | `/uploads/:id` | GET | Fetch an uploaded image (session required for private entries) |
 | `/ws?room=CODE&name=NAME&self=ID&pub=1&lobby=NAME` | WS | Game relay — the first connection registers the lobby; join, roster, round state, votes |
@@ -127,8 +147,9 @@ This is a LAN-first, self-hosted app. A few deliberate guardrails:
 - Uploads are accepted only as PNG, JPEG, GIF or WebP, detected by magic bytes.
   SVG uploads are rejected because SVG can execute scripts in the app origin.
 - Private entries are excluded from the public library and require a session;
-  signed-in players on the same instance can load them by ID during a LAN game.
-  Do not treat them as end-to-end secrets on a shared server.
+  public/shared uploads (the default for the server upload dropzone) are
+  visible to everyone and can be voted on. Do not treat private entries as
+  end-to-end secrets on a shared server.
 - Passwords are hashed with scrypt; sessions are HttpOnly cookies and expire
   server-side after 30 days.
 - There is no built-in TLS. If you expose the instance to the internet, put it
@@ -155,24 +176,26 @@ css/studio.css         Visual template gallery and studio tools
 css/packs.css          Search, paged server library, upload states
 css/game.css           Lobby, voting, result and finale polish
 js/lib.js              i18n (EN/DE), utilities
-js/packs.js            Pack API (IndexedDB), built-in catalog + server client
+js/packs.js            Pack API (IndexedDB), built-in cleanup + server client
 js/editor.js           MemeCanvas render engine (incl. layer duplicate)
 js/ui-studio.js        Studio page
-js/ui-packs.js         Packs page
+js/ui-packs.js         Packs page, direct server upload
 js/net.js              WebSocket client (Room)
 js/game.js             Party game: lobbies + rounds
+js/scoring.js          Pure scoring functions
+js/zip.js              Dependency-free ZIP writer for the finale
 js/main.js             Router, nav/footer, help
 server.js              Zero-dep Node server (static, uploads, WS relay)
-assets/templates/      15 built-in meme templates (optimized, ~1.6 MB)
 assets/icon-*.png      App icons (PWA / home screen)
 assets/screenshot.png  Home page screenshot (used in this README)
+assets/fonts/          Bundled Bangers/Nunito fonts (OFL)
 test/smoke.mjs         API smoke tests (node:test)
-test/invariants.mjs    Template catalog, i18n and utility invariants
+test/invariants.mjs    i18n, scoring, ZIP and utility invariants
 data/uploads/          Shared images (created automatically)
 ```
 
-Built-in template licenses and sources are listed in
-`assets/templates/LICENCES.txt`.
+There are no bundled meme images. Upload templates on the Packs page into the
+server library; they become available to the studio and every game.
 
 ## Testing
 
@@ -183,8 +206,8 @@ npm test
 Runs the dependency-free suite (`node --test`) against an isolated data
 directory. The smoke tests cover health, static serving, upload round-trips,
 content-type hygiene, deletion, accounts, private visibility, the storage quota,
-voting and lobbies. The invariant tests check the built-in template catalog
-against the files on disk, DE/EN key parity, and the room-code/shuffle helpers.
+voting and lobbies. The invariant tests check DE/EN key parity, scoring, ZIP,
+and the room-code/shuffle helpers.
 
 ---
 

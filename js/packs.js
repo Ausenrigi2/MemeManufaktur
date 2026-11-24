@@ -29,31 +29,6 @@ async function tx(store, mode, fn) {
   });
 }
 
-// Katalog der eingebauten Templates – bewusst als Daten, damit Tests ihn prüfen können.
-export const BUILTIN_GROUPS = [
-  { packId: 'pk_builtin_free', name: 'Internet-Klassiker', files: [
-    ['awesome-face', 'Awesome Face', 'svg'],
-    ['yuno-lego', 'Y U NO (LEGO)', 'jpg'],
-    ['this-is-fine', 'This Is Fine', 'jpg'],
-    ['illuminati', 'Illuminati', 'jpg'],
-    ['einstein', 'Einstein-Tafel', 'jpg'],
-    ['3d-printed-ban-hammer', 'Ban Hammer', 'jpg'],
-    ['elias-garcia-martinez-ecce-homo', 'Ecce Homo', 'jpg'],
-    ['macaca-nigra-self-portrait-large', 'Selbstporträt-Affe', 'jpg'],
-    ['joshua-reynolds-david-garrick-between-tr', 'Tragik & Komik', 'jpg'],
-    ['deep-fried-blue-gatorade', 'Deep Fried Gatorade', 'jpg'],
-    ['deepfriedpepsican', 'Deep Fried Pepsi Can', 'jpg'],
-    ['original-party-parrot', 'Party Parrot GIF', 'gif'],
-    ['chelovechek', 'Chelovechek', 'jpg'],
-    ['apollo-with-dodgeball', 'Apollo mit Dodgeball', 'jpg'],
-    ['smiling-cat', 'Smiling Cat', 'jpg'],
-  ],
-  // Review 2026-11: Bilder mit eingebautem Text oder Charts ohne Textraum sind keine Caption-Templates.
-  // 2026-11-19: zusätzlich aussortiert – Pie-Chart ohne Meme-Bezug, Wikipedia-Bild mit Text,
-  // doppelter Party-Parrot und zwei Screamer-GIFs mit unbrauchbarem ersten Frame.
-  removed: ['doge', 'high-impact', 'a-message-from-captain-obvious', 'captain-obvious-strikes-again-flickr-k-e', 'thank-you-captain-obvious-3464853227', 'captain-bvious', 'deepfried-meme-w', 'chaotic-evil', 'lawful-good', 'lawful-neutral', 'lawful-evil', 'chaotic-good', 'chaotic-neutral', 'alignment-chart', '3-3-alignment', 'dnd-alignment-chart', 'the-femboy-hooters-jingle-ranch-sauce', 'dydchart', 'commons-tan-iceberg-chart-blank-template', 'texts-from-hillary', 'ready-for-hillary-15696891292', 'hillary-bus-15671686926', 'madame-secretary-text-drive', 'advice-pie', 'icon-on-my-wikipedia-userbox', 'party-parrot', 'screamer2', 'screamer3', 'deep-fried-meme']},
-];
-
 export const Packs = {
   /** Alle Templates (Blob enthalten) – für Studio & Spiel */
   async allTemplates() {
@@ -107,7 +82,7 @@ export const Packs = {
         await this.updatePack(pack);
       }
       if (shared) {
-        try { await ServerAPI.upload({ id, name: meta.name, blob: file, mime: meta.mime }); } catch (e) { console.warn('Server-Upload fehlgeschlagen', e); }
+        try { await ServerAPI.upload({ id, name: meta.name, blob: file, mime: meta.mime, shared: !!shared }); } catch (e) { console.warn('Server-Upload fehlgeschlagen', e); }
       }
       results.push(meta);
     }
@@ -134,54 +109,14 @@ export const Packs = {
     return pack.tplIds.map((id) => all.find((t) => t.id === id)).filter(Boolean);
   },
 
-  /** Built-in Templates – idempotent: ergänzt fehlende Bilder (auch nach fehlgeschlagenen Fetches), räumt Eingestelltes auf */
-  async ensureBuiltins() {
-    const groups = BUILTIN_GROUPS;
-    // Eingestellter eigener "Klassiker"-Pack: auch in bestehenden Installationen aufräumen
-    const droppedPacks = [{ packId: 'pk_builtin_klassiker', keys: ['stonks', 'drake', 'ragecat', 'crying', 'shrug', 'confused', 'distracted', 'pigeon', 'leinwand-gelb', 'leinwand-pink'] }];
-    const existing = new Set((await this.allTemplates()).map((t) => t.id));
-    for (const d of droppedPacks) {
-      for (const key of d.keys) {
-        const id = `builtin_${key}`;
-        if (existing.has(id)) await this.deleteTemplate(id);
-      }
-      const p = (await this.allPacks()).find((x) => x.id === d.packId);
-      if (p) await this.deletePack(d.packId);
+  /** Alte eingebaute Templates/Packs aus früheren Versionen entfernen – nie eigene Uploads. */
+  async removeBuiltins() {
+    for (const t of await this.allTemplates()) {
+      if (t.builtin || String(t.id).startsWith('builtin_')) await this.deleteTemplate(t.id);
     }
-    for (const g of groups) {
-      for (const key of g.removed || []) {
-        const id = `builtin_${key}`;
-        if (!existing.has(id)) continue;
-        await this.deleteTemplate(id);
-        for (const p of await this.allPacks()) {
-          if (p.tplIds.includes(id)) { p.tplIds = p.tplIds.filter((x) => x !== id); await this.updatePack(p); }
-        }
-      }
-      const packs = await this.allPacks();
-      let pack = packs.find((p) => p.id === g.packId);
-      if (!pack) {
-        await this.createPackRaw(g.packId, g.name, true, g.files.map(([k]) => `builtin_${k}`));
-        pack = (await this.allPacks()).find((p) => p.id === g.packId);
-      }
-      let dirty = false;
-      for (const [key, name, ext = 'svg'] of g.files) {
-        const id = `builtin_${key}`; // feste IDs, damit Studio-Links stabil bleiben
-        if (pack.deleted?.includes(id)) continue; // bewusst vom Nutzer entfernt
-        if (!pack.tplIds.includes(id)) { pack.tplIds.push(id); dirty = true; }
-        if (existing.has(id)) continue;
-        const res = await fetch(`assets/templates/${key}.${ext}`);
-        if (!res.ok) continue; // beim nächsten Laden erneut versucht
-        await this.addTemplate({
-          id, name, blob: await res.blob(), mime: res.type || `image/${ext}`,
-          builtin: true, packId: g.packId, shared: null,
-          createdAt: Date.now(),
-        });
-      }
-      if (dirty) await this.updatePack(pack);
+    for (const p of await this.allPacks()) {
+      if (p.builtin || String(p.id).startsWith('pk_builtin_')) await this.deletePack(p.id);
     }
-  },
-  async createPackRaw(id, name, builtin, tplIds) {
-    await tx('packs', 'readwrite', (s) => s.put({ id, name, builtin, tplIds, order: 1, createdAt: Date.now() }));
   },
 };
 
@@ -237,7 +172,7 @@ export const ServerAPI = {
     const r = await fetch('/api/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: meta.id, name: meta.name, mime: meta.mime, data }),
+      body: JSON.stringify({ id: meta.id, name: meta.name, mime: meta.mime, shared: !!meta.shared, data }),
     });
     if (!r.ok) throw new Error(`upload ${r.status}`);
     return r.json();

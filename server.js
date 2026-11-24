@@ -220,7 +220,7 @@ async function handleVote(req, res) {
   await updateJson(LIBRARY_FILE, (fresh) => {
     const e = fresh.find((x) => x.id === id);
     if (!e) return fresh;
-    if (e.owner && e.owner !== user.id) return fresh; // private Einträge nicht fremd voten
+    if (e.owner && e.owner !== user.id && !e.shared) return fresh; // private Einträge nicht fremd voten
     const votes = e.votes || [];
     e.votes = votes.includes(user.id) ? votes.filter((x) => x !== user.id) : [...votes, user.id];
     result = { votes: e.votes.length };
@@ -281,7 +281,8 @@ async function handleUpload(req, res) {
     if (f.startsWith(`${id}.`) && f !== `${id}.${ext}`) await fs.unlink(path.join(UPLOADS_DIR, f)).catch(() => {});
   }
 
-  const entry = { id, name, mime: safeMime, ext, size: buf.length, createdAt: Date.now(), owner: willOwn ? user.id : (existing?.owner || null), votes: existing?.votes || [] };
+  const shared = body.shared === true;
+  const entry = { id, name, mime: safeMime, ext, size: buf.length, createdAt: Date.now(), owner: willOwn ? user.id : (existing?.owner || null), shared: shared || !!existing?.shared, votes: existing?.votes || [] };
   await updateJson(LIBRARY_FILE, (lib) => {
     const i = lib.findIndex((x) => x.id === id);
     if (i >= 0) lib[i] = { ...lib[i], ...entry, createdAt: lib[i].createdAt };
@@ -313,14 +314,14 @@ async function serveUpload(id, req, res) {
   if (!entry) return notFound(res);
   // Private Einträge sind für angemeldete LAN-Spieler erreichbar, aber nicht
   // für anonyme Besucher und nicht über die öffentliche Bibliothek auffindbar.
-  if (entry.owner && !(await currentUser(req))) return json(res, 401, { error: 'not signed in' });
+  if (entry.owner && !entry.shared && !(await currentUser(req))) return json(res, 401, { error: 'not signed in' });
   const file = path.join(UPLOADS_DIR, `${entry.id}.${entry.ext}`);
   const ext = path.extname(file).toLowerCase();
   const isSvg = ext === '.svg';
   const headers = {
     ...SECURITY_HEADERS,
     'Content-Type': isSvg ? 'application/octet-stream' : (IMAGE_MIMES.has(entry.mime) ? entry.mime : mimeOf(file)),
-    'Cache-Control': entry.owner ? 'private, no-store' : 'public, max-age=3600',
+    'Cache-Control': entry.owner && !entry.shared ? 'private, no-store' : 'public, max-age=3600',
     'Content-Security-Policy': "default-src 'none'; sandbox",
   };
   if (isSvg) headers['Content-Disposition'] = `attachment; filename="${entry.id}.svg"`;
@@ -390,8 +391,8 @@ async function handleHttp(req, res) {
       const user = await currentUser(req);
       const lib = await readLibrary();
       return json(res, 200, lib
-        .filter((x) => !x.owner || x.owner === user?.id)
-        .map(({ owner, ...x }) => ({ ...x, votes: x.votes || [], own: !!(user && owner === user.id) }))
+        .filter((x) => x.shared || !x.owner || x.owner === user?.id)
+        .map(({ owner, ...x }) => ({ ...x, votes: x.votes || [], own: !!(user && owner === user.id), public: !owner || !!x.shared }))
         .sort((a, b) => b.votes.length - a.votes.length));
     }
     if (p === '/api/vote' && req.method === 'POST') return await handleVote(req, res);

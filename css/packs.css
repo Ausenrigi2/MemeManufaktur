@@ -47,11 +47,14 @@
   margin: 0;
   font-weight: 800;
   font-size: 0.9rem;
-  color: var(--muted);
+  color: var(--on-bg-muted);
 }
 
 /* ---------- Text, Empty States, Upload ---------- */
-.packs-lead,
+.packs-lead {
+  color: var(--on-bg-muted);
+  max-width: 70ch;
+}
 .packs-sub {
   color: var(--muted);
   max-width: 70ch;
@@ -74,6 +77,22 @@
 
 .packs-upload {
   margin-bottom: 8px;
+}
+
+.server-upload {
+  margin-bottom: 18px;
+  border-color: rgba(33, 201, 123, 0.7);
+  background: linear-gradient(180deg, #fffdf8 0%, #f2fff9 100%);
+}
+.server-upload h2 { margin: 0 0 4px; font-size: 1.5rem; }
+.server-upload-hint { margin: -4px 0 12px; font-size: 0.82rem; }
+.server-dropzone {
+  background: #e8fbf3;
+  border-color: #129b62;
+}
+.server-dropzone:hover, .server-dropzone.drag {
+  background: var(--green);
+  color: #fff;
 }
 
 .packs-shared {
@@ -122,10 +141,13 @@
   margin-bottom: 4px;
 }
 
+.server-section .packs-sub { color: var(--on-bg-muted); }
+.server-upload .packs-sub { color: var(--muted); }
+
 .server-count {
   font-weight: 800;
   font-size: 0.9rem;
-  color: var(--muted);
+  color: var(--on-bg-muted);
 }
 
 .server-tpl {

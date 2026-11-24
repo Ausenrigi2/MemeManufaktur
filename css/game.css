@@ -49,9 +49,18 @@
 .vote-card-live .vote-meta { text-align: center; padding: 10px 0 4px; font-size: 1.05rem; }
 .vote-btns-live { padding: 0; margin-top: 10px; gap: 8px; }
 .vote-btns-live .vbtn { padding: 12px 6px; font-size: 1rem; }
-.vbtn[disabled] { opacity: 0.45; cursor: not-allowed; }
+.vbtn[disabled] { opacity: 0.45; cursor: not-allowed; filter: grayscale(1); }
 
 .vote-nav { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.vote-btns-live .vbtn { flex: 1 1 22%; }
+.vbtn-up { background: var(--green); color: #fff; border-color: #0b7a48; }
+.vbtn-down { background: var(--red); color: #fff; border-color: #a52a2a; }
+.vbtn-up.active { background: #0f9f5c; border-color: #fff; box-shadow: inset 0 0 0 2px #fff, 0 2px 0 #0b7a48; }
+.vbtn-down.active { background: #e04343; border-color: #fff; box-shadow: inset 0 0 0 2px #fff, 0 2px 0 #a52a2a; }
+.vbtn-meh { color: #6c6488; border-color: #6c6488; }
+.vbtn-meh.active { background: #ece9f7; border-color: #6c6488; }
+.vote-submit-row { display: flex; margin-top: 10px; }
+.vote-submit-row .btn { flex: 1; }
 .vote-timer { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
 .vote-timer .timerbar { flex: 1; margin: 0; height: 14px; }
 .vote-secs {
@@ -74,9 +83,134 @@
   .invite-bar { width: 100%; align-items: stretch; }
   .invite-copy { flex: 1 1 100%; }
   .lobby-actions .btn { flex: 1 1 auto; }
-  .vote-btns-live .vbtn { flex: 1 1 30%; }
+  .vote-btns-live .vbtn { flex: 1 1 44%; }
   .vote-img { max-height: 44vh; }
   .phase-wait { padding: 26px 14px; }
+}
+
+/* ---------- Caption-Runde: alles ohne Scrollen im Blick ---------- */
+.turn-screen { max-width: 1060px; margin: 14px auto 30px; }
+#app > .wrap.turn-screen > h1:first-child { margin: 10px 0 12px; font-size: clamp(2rem, 4vw, 3.3rem); }
+.turn-layout { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr); gap: 22px; align-items: start; }
+.turn-canvas { display: flex; flex-direction: column; min-width: 0; }
+.turn-canvas > .btn { align-self: flex-start; margin-top: 8px; }
+.turn-canvas .meme-preview { margin: 0; }
+.turn-canvas .meme-preview canvas {
+  width: auto; height: auto; max-width: 100%;
+  max-height: min(54vh, 560px); margin: 0 auto;
+}
+.turn-place { margin: 8px 0 0; color: var(--muted); font-size: 0.8rem; text-align: center; }
+.turn-timer { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.turn-timer .timerbar { flex: 1; margin: 0; }
+.turn-controls { display: flex; flex-direction: column; gap: 12px; }
+.turn-fields textarea { min-height: 62px; resize: vertical; }
+.turn-fields > div { margin-bottom: 8px; }
+.turn-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.turn-submit .btn { width: 100%; padding: 13px 20px; font-size: 1.05rem; }
+
+/* ---------- Eingereicht: Warte-Screen mit Sprüchen ---------- */
+.submitted-screen { max-width: 720px; }
+.submitted-card { display: grid; gap: 10px; justify-items: center; text-align: center; }
+.submitted-meme {
+  max-height: min(38vh, 380px); width: auto; max-width: 100%;
+  border: 2px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-sm);
+}
+.submitted-hook { margin: 4px 0 0; font-size: clamp(1.8rem, 4vw, 2.8rem); color: var(--violet); }
+.submitted-quip { margin: 0; min-height: 1.4em; color: var(--muted); font-weight: 800; }
+.submitted-screen .lobby-hint { margin: 0; }
+
+/* ---------- Voting: ein Meme, 10 Sekunden, umschaltbar ---------- */
+.vote-screen { max-width: 1000px; }
+.vote-main { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr); gap: 20px; align-items: start; }
+.vote-media { min-width: 0; }
+.vote-media .vote-img { margin: 0 auto; }
+.vote-controls { display: flex; flex-direction: column; gap: 10px; }
+.vote-controls .vote-btns-live { display: grid; grid-template-columns: 1fr 1fr; }
+.vote-timing { margin: 0; color: var(--muted); font-size: 0.82rem; font-weight: 700; text-align: center; }
+.vote-own-note {
+  margin: 0 0 8px; padding: 6px 10px; text-align: center;
+  background: var(--input); border: 2px dashed var(--line); border-radius: 10px;
+  color: var(--ink); font-size: 0.82rem; font-weight: 800;
+}
+.vote-dots { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+.vote-dot {
+  display: grid; place-items: center;
+  width: 32px; height: 32px; padding: 0; cursor: default;
+  border: 2px solid var(--line); border-radius: 9px; background: #fff;
+  color: var(--ink); font: 900 0.85rem var(--font-body); box-shadow: 0 2px 0 var(--line);
+}
+.vote-dot.active { background: var(--yellow); }
+.vote-dot:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
+.vote-nav .btn { flex: 1 1 120px; }
+
+/* ---------- Runden-Review + Game-Review ---------- */
+.review-screen, .final-screen { max-width: 1100px; }
+.review-sub { max-width: 70ch; margin: -6px auto 18px; text-align: center; color: var(--on-bg-muted); font-weight: 700; }
+.review-grid {
+  display: flex; flex-wrap: wrap; justify-content: center;
+  gap: 16px; margin-top: 18px; text-align: left;
+}
+.review-card {
+  position: relative; display: flex; flex: 0 1 300px; min-width: 0; flex-direction: column; gap: 8px;
+  padding: 10px; background: var(--card); color: var(--ink);
+  border: 2px solid rgba(255, 255, 255, 0.7); border-radius: 16px; box-shadow: var(--shadow-sm);
+}
+.review-img-wrap { overflow: hidden; background: #fff; border: 2px solid var(--line); border-radius: 10px; }
+.review-img { display: block; width: 100%; aspect-ratio: 1; object-fit: contain; background: #fff; }
+.review-rank {
+  position: absolute; top: 16px; left: 16px; z-index: 2;
+  padding: 2px 8px; background: var(--yellow); color: var(--ink);
+  border: 2px solid var(--line); border-radius: 8px;
+  font: 900 0.8rem var(--font-body); box-shadow: 0 2px 0 var(--line);
+}
+.review-meta { display: flex; justify-content: space-between; gap: 8px; font-weight: 900; }
+.review-round { color: var(--muted); font-size: 0.72rem; font-weight: 800; }
+.review-pts { color: var(--violet); white-space: nowrap; }
+.review-dl { align-self: flex-start; }
+.review-dl[aria-disabled="true"] { opacity: 0.45; pointer-events: none; }
+.review-actions { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 20px; }
+.review-countdown { margin: 0; color: var(--on-bg-muted); font-weight: 800; text-align: center; }
+.review-wait { color: var(--on-bg-muted); font-weight: 800; }
+.final-review { margin-top: 26px; }
+.final-review-head {
+  display: flex; justify-content: space-between; align-items: end;
+  gap: 14px; flex-wrap: wrap; margin-bottom: 6px;
+}
+.final-review-head h2 { margin: 0; color: #fff; text-shadow: 0 3px 0 rgba(40, 20, 90, 0.4); }
+.final-review-head .review-sub { margin: 4px 0 0; text-align: left; }
+.final-review .review-grid { margin-top: 10px; }
+
+/* ---------- Responsive ---------- */
+@media (max-width: 900px) {
+  body.in-game .topnav { display: none; }
+  body.in-game footer { display: none; }
+  body.in-game .topbar .wrap { padding-top: 6px; padding-bottom: 6px; }
+  body.in-game .logo { font-size: 1.3rem; }
+  body.in-game .logo img { width: 32px; height: 32px; }
+  .turn-layout { grid-template-columns: 1fr; gap: 14px; }
+  .turn-canvas .meme-preview canvas { max-height: 36vh; }
+  .turn-submit { position: sticky; bottom: 8px; z-index: 5; background: var(--card); padding: 8px 0 0; }
+  .vote-main { grid-template-columns: 1fr; gap: 10px; }
+}
+
+@media (max-width: 620px) {
+  .turn-canvas .meme-preview canvas { max-height: 32vh; }
+  .turn-fields textarea { min-height: 52px; }
+  .vote-dot { width: 28px; height: 28px; }
+  .vote-screen { margin: 8px auto 16px; }
+  body.in-game .vote-screen > h1 { font-size: 2rem; margin-bottom: 8px; }
+  .vote-screen .card { padding: 12px; }
+  .vote-screen .vote-hint,
+  .vote-screen .vote-timing { display: none; }
+  .vote-screen .vote-own-note { margin-bottom: 6px; padding: 4px 8px; font-size: 0.74rem; }
+  .vote-screen .vote-img { max-height: 32vh; }
+  .vote-screen .vote-btns-live { gap: 6px; }
+  .vote-screen .vbtn { padding: 10px 4px; font-size: 0.9rem; }
+  .vote-screen .vote-dots { margin: 6px 0 2px; }
+  .vote-screen .vote-nav { margin-top: 8px; }
+  .vote-screen .vote-timer { margin-top: 8px; }
+  .vote-screen .vote-submit-row { margin-top: 8px; }
+  .vote-screen .vote-step { margin: 6px 0 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

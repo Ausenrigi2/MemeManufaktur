@@ -76,17 +76,43 @@ export function openStudio(params = {}) {
     );
   }
 
+  const gallerySearch = el('input', {
+    class: 'gallery-search', type: 'search', placeholder: t('studio.search'), 'aria-label': t('studio.search'),
+    oninput: () => filterGallery(),
+  });
+  const galleryNoHit = el('p', { class: 'gallery-empty', hidden: true }, t('studio.galleryEmpty'));
+
   const galleryCard = el('section', { class: 'card tpl-gallery', 'aria-label': t('studio.gallery') },
     el('div', { class: 'gallery-head' }, el('h2', {}, '🖼️ ' + t('studio.gallery'))),
+    gallerySearch,
     el('div', { class: 'gallery-scroll' },
       el('section', { class: 'gallery-group gallery-quick' },
         el('h3', {}, t('studio.quickStart')),
         el('div', { class: 'gallery-grid gallery-grid-quick' }, randomBtn, uploadBtn),
       ),
       galleryGroups,
+      galleryNoHit,
     ),
     fileInput,
   );
+
+  function filterGallery() {
+    const q = gallerySearch.value.trim().toLowerCase();
+    let total = 0;
+    for (const group of galleryGroups.querySelectorAll('.gallery-group')) {
+      let shown = 0;
+      for (const tile of group.querySelectorAll('.tpl-tile')) {
+        const hit = !q || tile.title.toLowerCase().includes(q);
+        tile.hidden = !hit;
+        if (hit) shown++;
+      }
+      group.hidden = shown === 0;
+      total += shown;
+      const count = group.querySelector('.gallery-count');
+      if (count) count.textContent = String(shown);
+    }
+    galleryNoHit.hidden = total > 0 || !q;
+  }
 
   const fallbackBar = el('div', { class: 'tpl-bar tpl-fallback' },
     el('span', { class: 'tpl-fallback-label' }, t('studio.tpl')),
@@ -132,8 +158,12 @@ export function openStudio(params = {}) {
       groups++;
     }
 
-    if (!groups) galleryGroups.append(el('p', { class: 'gallery-empty' }, t('studio.galleryEmpty')));
+    if (!groups) galleryGroups.append(el('div', { class: 'gallery-empty-box' },
+      el('p', { class: 'gallery-empty' }, t('studio.galleryEmpty')),
+      el('a', { class: 'btn btn-sm btn-primary', href: '#/pakete' }, '⬆ ' + t('studio.uploadTemplates')),
+    ));
     markActiveTemplate(activeTplId);
+    filterGallery();
   }
 
   async function loadTemplate(id) {
@@ -379,6 +409,11 @@ export function openStudio(params = {}) {
     } catch { toast('Kopieren nicht möglich – nutze „Herunterladen“'); }
   });
 
+  // Hauptaktion ohne Scrollen erreichbar: Download direkt an der Bühne.
+  stageToolbar.querySelector('.stage-tool-btns').append(
+    el('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => dlBtn.click() }, '⬇ ' + t('studio.download')),
+  );
+
   // ---------- Tastatur ----------
   function isTyping(target) {
     const tag = target?.tagName;
@@ -418,6 +453,7 @@ export function openStudio(params = {}) {
   function cleanup() {
     abort.abort();
     revokeThumbs();
+    mc.dispose();
     if (currentStudioCleanup === cleanup) currentStudioCleanup = null;
   }
   currentStudioCleanup = cleanup;

@@ -1,64 +1,12 @@
 // ============ Invarianten-Test (Zero-Dep): node --test ============
-// Prüft den eingebauten Template-Katalog gegen den Dateibestand sowie
-// i18n-Parität und die kleinen Utils (roomCode, shuffle).
+// Prüft i18n-Parität, Punkte, ZIP und die kleinen Utils (roomCode, shuffle).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-import { BUILTIN_GROUPS } from '../js/packs.js';
 import { I18N, roomCode, shuffle } from '../js/lib.js';
-
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const TPL_DIR = path.join(ROOT, 'assets', 'templates');
-
-const allFiles = BUILTIN_GROUPS.flatMap((g) => g.files);
-const keys = allFiles.map(([key]) => key);
-const removed = BUILTIN_GROUPS.flatMap((g) => g.removed || []);
-
-test('jede im Katalog gelistete Template-Datei existiert', () => {
-  for (const [key, , ext] of allFiles) {
-    const file = path.join(TPL_DIR, `${key}.${ext}`);
-    assert.ok(fs.existsSync(file), `Datei fehlt: assets/templates/${key}.${ext}`);
-  }
-});
-
-test('kein Template-Key ist doppelt im Katalog', () => {
-  const seen = new Set();
-  for (const key of keys) {
-    assert.ok(!seen.has(key), `Key doppelt: ${key}`);
-    seen.add(key);
-  }
-  assert.equal(seen.size, keys.length);
-});
-
-test('entfernte Keys tauchen nicht mehr in den aktiven Dateien auf', () => {
-  const active = new Set(keys);
-  for (const key of removed) {
-    assert.ok(!active.has(key), `Key ${key} ist in removed, aber weiterhin aktiv`);
-  }
-});
-
-test('am 2026-11-19 entfernte Dateien sind weder auf der Platte noch aktiv, aber in removed', () => {
-  const dated = [
-    'advice-pie',
-    'icon-on-my-wikipedia-userbox',
-    'party-parrot',
-    'screamer2',
-    'screamer3',
-    'deep-fried-meme',
-  ];
-  const removedSet = new Set(removed);
-  const active = new Set(keys);
-  for (const key of dated) {
-    assert.ok(removedSet.has(key), `removed fehlt: ${key}`);
-    assert.ok(!active.has(key), `Key ist noch aktiv: ${key}`);
-    const leftovers = fs.readdirSync(TPL_DIR).filter((f) => f.startsWith(`${key}.`));
-    assert.deepEqual(leftovers, [], `Datei noch vorhanden: ${leftovers.join(', ')}`);
-  }
-});
+import { createZip } from '../js/zip.js';
+import { scoreRound, applyTotals } from '../js/scoring.js';
 
 test('DE und EN haben exakt dieselben i18n-Keys', () => {
   const de = Object.keys(I18N.de).sort();
@@ -99,4 +47,48 @@ test('shuffle liefert dieselben Elemente als Permutation und lässt das Original
 test('shuffle bleibt bei leeren und einelementigen Arrays stabil', () => {
   assert.deepEqual(shuffle([]), []);
   assert.deepEqual(shuffle([7]), [7]);
+});
+
+test('createZip schreibt gültige Store-Einträge mit Dateinamen und Inhalt', async () => {
+  const files = [
+    { name: 'meme-1.jpg', data: new TextEncoder().encode('erste Datei') },
+    { name: 'meme-2.jpg', data: new TextEncoder().encode('zweite Datei') },
+  ];
+  const bytes = new Uint8Array(await createZip(files).arrayBuffer());
+  const view = new DataView(bytes.buffer);
+  assert.equal(view.getUint32(0, true), 0x04034b50, 'Local header fehlt');
+  assert.equal(view.getUint32(bytes.length - 22, true), 0x06054b50, 'EOCD fehlt');
+  assert.equal(view.getUint16(bytes.length - 12, true), 2, 'falsche Eintragszahl');
+  const text = new TextDecoder().decode(bytes);
+  assert.match(text, /meme-1\.jpg/);
+  assert.match(text, /meme-2\.jpg/);
+  assert.match(text, /zweite Datei/);
+});
+
+test('scoreRound zählt Krocha, Gschissn, Najo und Peak korrekt', () => {
+  const players = [{ id: 'a', name: 'Anna' }, { id: 'b', name: 'Ben' }, { id: 'c', name: 'Cleo' }];
+  const memes = [{ playerId: 'a' }, { playerId: 'b' }, { playerId: 'c' }];
+  const votes = [
+    { selfId: 'a', ups: ['b'], downs: ['c'], mehs: [], peak: 'b' },
+    { selfId: 'b', ups: ['a'], downs: [], mehs: ['c'], peak: 'c' },
+    { selfId: 'c', ups: [], downs: [], mehs: ['b'], peak: 'a' },
+  ];
+  const scores = scoreRound({ memes, votes, players, round: 2 });
+  assert.deepEqual(scores.map((s) => [s.playerId, s.pts]), [['a', 510], ['b', 510], ['c', -490]]);
+  assert.deepEqual(scores[0].up, ['Ben']);
+  assert.deepEqual(scores[1].meh, ['Cleo']);
+  assert.equal(scores[0].round, 2);
+
+  const totals = applyTotals(new Map(players.map((p) => [p.id, 0])), scores, votes);
+  assert.equal(totals.get('a'), 765);  // 510 + halber Peak auf B
+  assert.equal(totals.get('b'), 265);  // 510 + halber Peak auf C
+  assert.equal(totals.get('c'), -235); // -490 + halber Peak auf A
+});
+
+test('scoreRound ignoriert Stimmen und Peaks auf das eigene Meme', () => {
+  const players = [{ id: 'a', name: 'Anna' }, { id: 'b', name: 'Ben' }];
+  const memes = [{ playerId: 'a' }, { playerId: 'b' }];
+  const votes = [{ selfId: 'a', ups: ['a'], downs: [], mehs: [], peak: 'a' }];
+  const scores = scoreRound({ memes, votes, players, round: 1 });
+  assert.deepEqual(scores.map((s) => [s.playerId, s.pts]), [['a', 0], ['b', 0]]);
 });

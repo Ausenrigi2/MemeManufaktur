@@ -78,6 +78,7 @@ function buildChrome() {
     el('div', { class: 'wrap' },
       el('a', { class: 'logo', href: '#/spiel' }, el('img', { src: 'favicon.svg', alt: '' }), 'MemeManufaktur'),
       nav,
+      el('button', { class: 'btn btn-sm in-game-leave', type: 'button', 'data-i18n': 'spiel.leave', onclick: () => window.__mmLeaveGame?.() }, t('spiel.leave')),
       langBtns,
     ),
   );
@@ -146,7 +147,7 @@ function renderHelp(app) {
 async function boot() {
   document.documentElement.lang = LS.get('lang', 'de');
   buildChrome();
-  try { await Packs.ensureBuiltins(); } catch (e) { console.warn('Built-in Templates:', e); }
+  try { await Packs.removeBuiltins(); } catch (e) { console.warn('Template-Bereinigung:', e); }
   const serverUp = await ServerAPI.check();
   updateServerStatus(serverUp);
   try { window.__serverTpls = ServerAPI.available ? await ServerAPI.library() : []; } catch { window.__serverTpls = []; }

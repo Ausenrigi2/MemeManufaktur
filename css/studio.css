@@ -9,6 +9,7 @@
 .tpl-gallery { padding: 16px 18px; margin-bottom: 12px; }
 .gallery-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .gallery-head h2 { margin: 0; font-size: 1.2rem; }
+.gallery-search { margin-top: 10px; max-width: 360px; }
 .gallery-scroll {
   max-height: 372px; overflow-y: auto; overscroll-behavior: contain;
   margin: 12px -4px 0 0; padding: 2px 4px 8px 2px;
@@ -22,6 +23,8 @@
 }
 .gallery-count { font: 800 0.75rem var(--font-body); color: var(--muted); }
 .gallery-empty { margin: 4px 0; color: var(--muted); font-weight: 700; }
+.gallery-empty-box { display: grid; justify-items: start; gap: 8px; margin-top: 8px; }
+.gallery-empty-box .gallery-empty { margin: 0; }
 
 .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 10px; }
 .gallery-grid-quick { grid-template-columns: repeat(auto-fit, minmax(140px, 190px)); justify-content: start; }

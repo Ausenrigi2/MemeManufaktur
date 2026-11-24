@@ -4,6 +4,8 @@ import { MemeCanvas, renderMemeToDataUrl } from './editor.js';
 import { zoneFor, layerPatch, normLayers } from './textzones.js';
 import { Packs, ServerAPI } from './packs.js';
 import { Room } from './net.js';
+import { createZip } from './zip.js';
+import { scoreRound, applyTotals } from './scoring.js';
 
 // Spiel-Styles liegen in css/game.css; index.html bleibt unangetastet.
 if (!document.querySelector('link[data-game-css]')) {
@@ -109,18 +111,31 @@ export async function resolveTpl(key) {
   return tpl ? { blob: tpl.blob, name: tpl.name } : null;
 }
 
+async function templateKeyPool() {
+  const local = (await Packs.allTemplates()).map((t) => t.id);
+  let server = [];
+  if (ServerAPI.available) {
+    try {
+      server = (await ServerAPI.library())
+        .filter((item) => item.public)
+        .map((item) => `srv:${item.id}`);
+    } catch { /* Server kurz weg – lokale Packs reichen */ }
+  }
+  return [...local, ...server];
+}
+
 async function pickTemplates(count, mode, idList = [], ownPools = null) {
-  const all = await Packs.allTemplates();
-  // ownPools: pro Spieler eigene Keys ('srv:...') – nur wenn der Host sie erlaubt.
-  const needPool = !ownPools || idList.some((id) => !ownPools.get(id)?.length);
-  if (!all.length && needPool) throw new Error('Keine Templates – erst Bilder in Pakete hochladen.');
-  const pool = shuffle(all);
+  const keys = await templateKeyPool();
+  // ownPacks: pro Spieler eigene Keys ('srv:...') – nur wenn der Host sie erlaubt.
+  const needPool = mode === 'same' || !ownPools || idList.some((id) => !ownPools.get(id)?.length);
+  if (!keys.length && needPool) throw new Error(t('spiel.noTemplates'));
+  const pool = shuffle(keys);
   const out = [];
   for (let i = 0; i < count; i++) {
     // 'same' behält bewusst EIN gemeinsames Template – eigene Packs gelten nur in random/theme
     const own = ownPools && mode !== 'same' ? ownPools.get(idList[i]) : null;
     if (own?.length) { out.push(rand(own)); continue; }
-    out.push(mode === 'same' ? pool[0].id : pool[i % pool.length].id);
+    out.push(mode === 'same' ? pool[0] : pool[i % pool.length]);
   }
   return out;
 }
@@ -147,7 +162,7 @@ export async function openLobby(container) {
   // Einladungslink (#/spiel?code=XXXX) füllt den Code direkt vor.
   const wantsCode = new URLSearchParams(location.hash.split('?')[1] || '').get('code');
   if (wantsCode) codeInput.value = wantsCode.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
-  const statusEl = el('p', { style: 'font-weight:800;color:var(--muted)', 'aria-live': 'polite', hidden: true });
+  const statusEl = el('p', { class: 'panel-note', 'aria-live': 'polite', hidden: true });
   let poll = null;
   let entering = false;
 
@@ -183,7 +198,7 @@ export async function openLobby(container) {
     let list = [];
     try { list = await ServerAPI.lobbies(); } catch { return; }
     listWrap.innerHTML = '';
-    if (!list.length) { listWrap.append(el('p', { style: 'color:var(--muted);margin:0' }, t('lobby.noOpen'))); return; }
+    if (!list.length) { listWrap.append(el('p', { class: 'panel-note', style: 'margin:0' }, t('lobby.noOpen'))); return; }
     for (const l of list) {
       listWrap.append(el('div', { class: 'lobby-row' },
         el('span', {}, (l.name || l.code) + ' · ' + t('lobby.playersIn', { n: l.players })),
@@ -192,9 +207,21 @@ export async function openLobby(container) {
     }
   }
 
-  function art(names) {
+  function art(icons) {
     return el('span', { class: 'pc-stack', 'aria-hidden': 'true' },
-      ...names.map((n) => el('img', { src: `assets/templates/${n}`, alt: '' })),
+      ...icons.map((icon) => el('span', { class: 'pc-photo' }, icon)),
+    );
+  }
+
+  function playCard({ cls, tag = 'button', href, onclick, emoji, title, desc, cta, images }) {
+    return el(tag, { class: `play-card ${cls}`, ...(href ? { href } : { type: 'button', onclick }) },
+      art(images),
+      el('span', { class: 'pc-emoji', 'aria-hidden': 'true' }, emoji),
+      el('span', { class: 'pc-copy' },
+        el('span', { class: 'pc-title' }, title),
+        el('span', { class: 'pc-desc' }, desc),
+        el('span', { class: 'pc-cta' }, cta + ' →'),
+      ),
     );
   }
 
@@ -205,25 +232,29 @@ export async function openLobby(container) {
         el('h1', { html: t('home.title') }),
         el('p', { class: 'home-lead' }, t('home.lead')),
       ),
-      el('div', { class: 'home-fields' },
-        el('div', {}, el('label', {}, t('spiel.yourName')), nameInput),
-        el('div', {}, el('label', {}, t('home.lobbyName')), lobbyInput),
+      el('details', { class: 'home-setup', open: wantsCode ? '' : null },
+        el('summary', {}, '👤 ' + t('home.setup')),
+        el('div', { class: 'home-fields' },
+          el('div', {}, el('label', {}, t('spiel.yourName')), nameInput),
+          el('div', {}, el('label', {}, t('home.lobbyName')), lobbyInput),
+        ),
       ),
       el('div', { class: 'play-grid' },
-        el('button', { class: 'play-card quick', type: 'button', onclick: quickPlay },
-          el('span', { class: 'pc-emoji' }, '⚡'),
-          el('span', { class: 'pc-title' }, t('home.quick')),
-          el('span', { class: 'pc-desc' }, t('home.quick.d')),
-          el('span', { class: 'pc-cta' }, t('home.quick.cta') + ' →'),
-          art(['original-party-parrot.gif', 'awesome-face.svg', 'deepfriedpepsican.jpg']),
-        ),
-        el('button', { class: 'play-card private', type: 'button', onclick: () => createLobby(false) },
-          el('span', { class: 'pc-emoji' }, '🔒'),
-          el('span', { class: 'pc-title' }, t('home.private')),
-          el('span', { class: 'pc-desc' }, t('home.private.d')),
-          el('span', { class: 'pc-cta' }, t('home.private.cta') + ' →'),
-          art(['chelovechek.jpg', 'deep-fried-blue-gatorade.jpg', 'yuno-lego.jpg']),
-        ),
+        playCard({
+          cls: 'quick', onclick: quickPlay, emoji: '⚡',
+          title: t('home.quick'), desc: t('home.quick.d'), cta: t('home.quick.cta'),
+          images: ['😂', '💥', '⚡'],
+        }),
+        playCard({
+          cls: 'private', onclick: () => createLobby(false), emoji: '🔒',
+          title: t('home.private'), desc: t('home.private.d'), cta: t('home.private.cta'),
+          images: ['🤫', '🎉', '🔒'],
+        }),
+        playCard({
+          cls: 'studio', tag: 'a', href: '#/studio', emoji: '🖌️',
+          title: t('home.studio'), desc: t('home.studio.d'), cta: t('home.studio.cta'),
+          images: ['🖌️', '🖼️', '✨'],
+        }),
       ),
       el('div', { class: 'home-lower' },
         el('div', { class: 'card home-panel' },
@@ -262,6 +293,7 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
     let ownKeys = []; // eigene Server-Keys dieser Person ('srv:...')
     lanState.room = room;
     window.__mmInGame = true;
+    document.body.classList.add('in-game');
 
     function setStatus(msg) {
       if (!statusEl) return;
@@ -275,6 +307,7 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
     let setupCardOuter = null; // Host-Einstellungen (erst nach dem Setup zugewiesen)
 
     function renderLobby() {
+      lanState.hostId = hostId;
       lobbyCard.innerHTML = '';
       const inviteUrl = `${location.origin}${location.pathname}#/spiel?code=${encodeURIComponent(code)}`;
 
@@ -337,7 +370,7 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
     }
 
     // Setup-Formular für Host in der Lobby
-    let cfg = { mode: 'random', relaxed: false, rounds: 3, timeSec: 90, ownPacks: false };
+    let cfg = { mode: 'random', relaxed: false, rounds: 3, timeSec: 90, ownPacks: false, autoNext: false };
     function setupControls() {
       const g = el('div', { class: 'card', style: 'max-width:560px;margin:14px auto' });
       const set = (k, v) => { cfg[k] = v; };
@@ -360,10 +393,13 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
       timeSel.addEventListener('change', () => set('timeSec', Number(timeSel.value) || 90));
       const ownChk = el('input', { type: 'checkbox' });
       ownChk.addEventListener('change', () => set('ownPacks', ownChk.checked));
+      const autoChk = el('input', { type: 'checkbox' });
+      autoChk.addEventListener('change', () => set('autoNext', autoChk.checked));
       g.append(
         el('h3', {}, t('spiel.setup.t')),
         radios,
         el('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:10px' }, rel, el('span', {}, t('spiel.relaxed'))),
+        el('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:10px' }, autoChk, el('span', { title: t('spiel.autoNext.d') }, t('spiel.autoNext'))),
         el('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:10px' }, ownChk, el('span', {}, t('spiel.ownPacks'))),
         el('div', { class: 'fieldrow', style: 'margin-top:10px' },
           el('div', {}, el('label', {}, t('spiel.rounds')), roundsSel),
@@ -378,10 +414,17 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
     app.innerHTML = '';
     app.append(el('div', { class: 'wrap' }, lobbyCard, setupCardOuter, gameArea));
     renderLobby();
+    window.scrollTo(0, 0);
 
     function hardLeave() {
       leftGame = true;
       window.__mmInGame = false;
+      window.__mmLeaveGame = null;
+      lanState.phase = 'idle';
+      clearTimeout(lanState.reviewTimer);
+      lanState.reviewTimer = null;
+      lanState.reviewAdvance = null;
+      document.body.classList.remove('in-game');
       if (lanState.room === room) lanState.room = null;
       room.close();
     }
@@ -389,6 +432,7 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
       hardLeave();
       location.hash = '#/';
     }
+    window.__mmLeaveGame = leave;
 
     // Wer die Spiel-Route per Navigation verlässt, verlässt auch den Raum –
     // sonst warten die anderen auf eine Caption/Stimme, die nie kommt.
@@ -433,7 +477,7 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
           players.delete(msg.selfId);
           if (hostId === myId && startedFlag) {
             if (lanState.collecting) handleHostSubmit({ selfId: msg.selfId, layers: [] });
-            if (lanState.voting) window.__lanHostVote({ selfId: msg.selfId, ups: [], downs: [], peak: null });
+            if (lanState.voting) window.__lanHostVote({ selfId: msg.selfId, ups: [], downs: [], mehs: [], peak: null });
           }
           if (hostId === msg.selfId) {
             if (!startedFlag) {
@@ -467,6 +511,12 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
         case 'vote':
           if (hostId === myId) hostHandleVote(msg);
           break;
+        case 'reroll':
+          if (hostId === myId) window.__lanHostReroll?.(msg);
+          break;
+        case 'rerolled':
+          lanState.rerollApply?.(msg);
+          break;
         case 'voting-start':
           if (msg.myId === myId) doVote(msg);
           break;
@@ -490,7 +540,7 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
 }
 
 // ---------- LAN Host/Guest-Phasen (auf Modulebene, da Closure-Shared-State nötig) ----------
-const lanState = { cfg: null, room: null, round: 0, rounds: 3, memes: [], votes: [], totals: new Map(), theme: null, players: [], assignments: new Map(), turnAdvance: null, voteAdvance: null, ownPacks: new Map(), collecting: false, voting: false, allMemes: [] }; // ownPacks: selfId -> [srv-Keys]
+const lanState = { cfg: null, room: null, round: 0, rounds: 3, memes: [], votes: [], totals: new Map(), theme: null, players: [], assignments: new Map(), tpls: {}, turnAdvance: null, voteAdvance: null, reviewAdvance: null, reviewTimer: null, ownPacks: new Map(), collecting: false, voting: false, allMemes: [], phase: 'idle' }; // ownPacks: selfId -> [srv-Keys]
 
 /** Host: Caption aus einer „submit“-Nachricht in die laufende Runde übernehmen */
 export function handleHostSubmit(msg) {
@@ -512,6 +562,7 @@ export function handleHostSubmit(msg) {
 }
 
 async function announceStart(msg) {
+  lanState.phase = 'start';
   lanState.cfg = msg.cfg;
   lanState.round = 0;
   lanState.totals = new Map(msg.players.map((p) => [p.id, 0]));
@@ -525,6 +576,7 @@ async function announceStart(msg) {
 }
 
 function doTurn(msg) {
+  lanState.phase = 'turn';
   if (msg.tpls) Object.assign(window.__lanTpls = window.__lanTpls || {}, msg.tpls);
   const app = document.getElementById('app');
   let settled = false;
@@ -559,47 +611,121 @@ function doTurn(msg) {
     addRow(mc.addLayer({ text: '', ...(layerPatch(mc, z?.bottom) || def(mc.ch - Math.round(base * 0.13))) }));
 
     const timerWrap = el('div', { class: 'timerbar' }, el('i'));
+    const turnSecs = el('span', { class: 'vote-secs', 'aria-hidden': 'true' });
+    const timerRow = el('div', { class: 'turn-timer' }, timerWrap, turnSecs);
 
     function finish() {
       if (settled) return;
       settled = true;
+      clearInterval(iv);
+      let preview = null;
+      try { preview = canvas.toDataURL('image/png'); } catch { /* Canvas gesperrt – ohne Vorschau weitermachen */ }
+      mc.dispose();
       const room = lanState.room;
       const layers = mc.layers.map((l) => ({ text: String(l.text).slice(0, 200), xF: +(l.x / mc.cw).toFixed(3), yF: +(l.y / mc.ch).toFixed(3), fsF: +(l.fontSize / base).toFixed(3) }));
-      room.send({ type: 'submit', selfId: room.selfId, layers });
+      lanState.rerollApply = null;
+      room?.send({ type: 'submit', selfId: room.selfId, layers });
+      showSubmitted(preview);
     }
 
-    app.innerHTML = '';
-    app.append(el('div', { class: 'wrap phase-screen' },
-      el('h1', {}, `${t('spiel.turn.yours')}${msg.theme ? ` · 🎭 ${msg.theme}` : ''}`),
-      el('div', { class: 'turn-box card' },
-        el('div', { class: 'meme-preview' }, canvas),
-        el('p', { style: 'color:var(--muted);font-size:0.85rem' }, t('spiel.turn.place')),
-        fieldsWrap,
-        el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
-          el('button', { class: 'btn btn-sm', type: 'button', onclick: () => addRow(mc.addLayer({ text: '' })) }, '+ ' + t('studio.addLayer')),
-          el('button', {
-            class: 'btn btn-sm', type: 'button',
-            onclick: () => {
-              const target = rows.get(mc.selectedId) || [...rows.values()].find((n) => !n.value.trim()) || [...rows.values()][0];
-              if (!target) return;
-              const en = LS.get('lang', 'de') === 'en';
-              target.value = en ? rand(INSPO_TOPS_EN.concat(INSPO_BOTTOMS_EN)) : rand(INSPO_TOPS.concat(INSPO_BOTTOMS));
-              target.dispatchEvent(new Event('input', { bubbles: true }));
-              target.focus();
-            },
-          }, '💡 ' + t('spiel.turn.inspo')),
+    function showSubmitted(preview) {
+      if (lanState.phase !== 'turn') return;
+      const hooks = ['spiel.turn.quip1', 'spiel.turn.quip2', 'spiel.turn.quip3', 'spiel.turn.quip4'];
+      const quip = el('p', { class: 'submitted-quip', 'aria-live': 'polite' }, t(rand(hooks)));
+      const box = el('div', { class: 'wrap phase-screen turn-screen submitted-screen' },
+        el('h1', {}, '🏆 ' + t('spiel.turn.submitted')),
+        el('div', { class: 'card submitted-card' },
+          preview ? el('img', { class: 'submitted-meme', src: preview, alt: '' }) : null,
+          el('h2', { class: 'submitted-hook' }, t('spiel.turn.waitTitle')),
+          quip,
+          el('p', { class: 'lobby-hint' }, t('spiel.turn.waitOthers')),
         ),
-        timerWrap,
-        el('div', { style: 'margin-top:14px' }, el('button', { class: 'btn btn-green', onclick: finish }, '✅ ' + t('spiel.turn.submit'))),
+      );
+      app.innerHTML = '';
+      app.append(box);
+      window.scrollTo(0, 0);
+      const quipIv = setInterval(() => {
+        if (!box.isConnected) { clearInterval(quipIv); return; }
+        quip.textContent = t(rand(hooks));
+      }, 2600);
+    }
+
+    let rerollBusy = false;
+    const rerollBtn = el('button', {
+      class: 'btn btn-sm', type: 'button', title: t('spiel.turn.reroll'),
+      onclick: () => {
+        if (settled || rerollBusy || !lanState.room) return;
+        rerollBusy = true;
+        rerollBtn.disabled = true;
+        rerollBtn.textContent = '… ' + t('spiel.turn.reroll');
+        lanState.room.send({ type: 'reroll', selfId: msg.playerId });
+        setTimeout(() => {
+          if (settled || !rerollBusy) return;
+          rerollBusy = false;
+          rerollBtn.disabled = false;
+          rerollBtn.textContent = '🎲 ' + t('spiel.turn.reroll');
+        }, 5000);
+      },
+    }, '🎲 ' + t('spiel.turn.reroll'));
+
+    lanState.rerollApply = async (m) => {
+      if (settled || !canvas.isConnected || m.playerId !== msg.playerId) return;
+      try {
+        const res = await fetch(m.tpl);
+        if (!res.ok) throw new Error('Template');
+        await mc.setImage(await res.blob(), m.name || m.tplKey);
+        window.__lanTpls = window.__lanTpls || {};
+        window.__lanTpls[m.tplKey] = m.tpl;
+      } catch (e) {
+        console.error(e);
+        toast('⚠️ ' + t('spiel.turn.error'));
+      } finally {
+        rerollBusy = false;
+        rerollBtn.disabled = false;
+        rerollBtn.textContent = '🎲 ' + t('spiel.turn.reroll');
+      }
+    };
+
+    app.innerHTML = '';
+    app.append(el('div', { class: 'wrap phase-screen turn-screen' },
+      el('h1', {}, `${t('spiel.turn.yours')}${msg.theme ? ` · 🎭 ${msg.theme}` : ''}`),
+      el('div', { class: 'turn-box card turn-layout' },
+        el('div', { class: 'turn-canvas' },
+          el('div', { class: 'meme-preview' }, canvas),
+          el('p', { class: 'turn-place' }, t('spiel.turn.place')),
+          timerRow,
+          rerollBtn,
+        ),
+        el('div', { class: 'turn-controls' },
+          fieldsWrap,
+          el('div', { class: 'turn-actions' },
+            el('button', { class: 'btn btn-sm', type: 'button', onclick: () => addRow(mc.addLayer({ text: '' })) }, '+ ' + t('studio.addLayer')),
+            el('button', {
+              class: 'btn btn-sm', type: 'button',
+              onclick: () => {
+                const target = rows.get(mc.selectedId) || [...rows.values()].find((n) => !n.value.trim()) || [...rows.values()][0];
+                if (!target) return;
+                const en = LS.get('lang', 'de') === 'en';
+                target.value = en ? rand(INSPO_TOPS_EN.concat(INSPO_BOTTOMS_EN)) : rand(INSPO_TOPS.concat(INSPO_BOTTOMS));
+                target.dispatchEvent(new Event('input', { bubbles: true }));
+                target.focus();
+              },
+            }, '💡 ' + t('spiel.turn.inspo')),
+          ),
+          el('div', { class: 'turn-submit' }, el('button', { class: 'btn btn-green', onclick: finish }, '✅ ' + t('spiel.turn.submit'))),
+        ),
       ),
     ));
     window.scrollTo(0, 0);
 
-    const leftSec = Math.max(1, Math.round((msg.until - Date.now()) / 1000));
+    // Lokale Rundenzeit statt Geräteuhr: verhindert, dass ein Handy mit falscher Uhrzeit sofort abgibt.
+    const leftSec = Math.max(1, Number(msg.timeSec) || Math.round((msg.until - Date.now()) / 1000));
+    turnSecs.textContent = leftSec + ' s';
     const startedAt = Date.now();
     const iv = setInterval(() => {
-      if (settled) return clearInterval(iv);
+      if (settled || !timerRow.isConnected) return clearInterval(iv);
       const left = Math.max(0, leftSec - Math.floor((Date.now() - startedAt) / 1000));
+      turnSecs.textContent = left + ' s';
       timerWrap.firstElementChild.style.width = (left / leftSec) * 100 + '%';
       timerWrap.classList.toggle('warn', left <= 10);
       if (left <= 0) { clearInterval(iv); finish(); }
@@ -626,14 +752,16 @@ function doTurn(msg) {
 }
 
 function doVote(msg) {
+  lanState.phase = 'vote';
   if (msg.tpls) Object.assign(window.__lanTpls = window.__lanTpls || {}, msg.tpls);
   const app = document.getElementById('app');
   const room = lanState.room;
-  const list = msg.memes.filter((m) => m.playerId !== msg.myId);
+  // Der Host hat die Reihenfolge gemischt; alle sehen exakt dieselbe Reihenfolge.
+  const list = msg.memes;
+  const myId = msg.myId;
 
   if (!list.length) {
-    // Keine fremden Memes: sofort leer abstimmen, sonst wartet der Host bis zum Timeout.
-    room?.send({ type: 'vote', selfId: room.selfId, ups: [], downs: [], peak: null });
+    room?.send({ type: 'vote', selfId: room.selfId, ups: [], downs: [], mehs: [], peak: null });
     app.innerHTML = '';
     app.append(el('div', { class: 'wrap phase-screen' },
       el('h1', {}, t('spiel.vote.title')),
@@ -646,216 +774,312 @@ function doVote(msg) {
     return;
   }
 
-  // shortcut: festes Zeitbudget pro Meme (max. 50 s gesamt), damit auch 45-s-Runden
-  // vor dem Host-Vote-Timeout fertig werden; bei Bedarf Zeit aus voting-start mitgeben.
-  const perMeme = Math.max(4, Math.min(10, Math.floor(50 / list.length)));
-  const ups = new Set(), downs = new Set(), decided = new Set();
-  let peak = null; // einmal pro Runde, bis zum Abgeben auf ein anderes Meme verschiebbar
-  let sent = false, idx = 0, timer = null, autoTimer = null, showSeq = 0;
-  const cache = {}; // dataURLs cachen, damit Zurück nicht neu rendert
+  const perMeme = 10; // Sekunden pro Meme, für alle gleich
+  const startedAt = Date.now();
+  const ups = new Set(), downs = new Set(), mehs = new Set();
+  const cache = {};
+  let peak = null, sent = false, ended = false, idx = 0, showSeq = 0, clock = null;
 
   const img = el('img', { class: 'vote-img', alt: '' });
   const meta = el('div', { class: 'vote-meta' });
-  const upB = el('button', { class: 'vbtn vbtn-up', type: 'button', title: t('spiel.vote.up'), 'aria-label': t('spiel.vote.up') }, '👍');
-  const dnB = el('button', { class: 'vbtn vbtn-down', type: 'button', title: t('spiel.vote.down'), 'aria-label': t('spiel.vote.down') }, '👎');
-  const pkB = el('button', { class: 'vbtn vbtn-peak', type: 'button', title: t('spiel.vote.peak'), 'aria-label': t('spiel.vote.peak'), 'aria-pressed': 'false' }, '⛰️ PEAK');
+  const upB = el('button', { class: 'vbtn vbtn-up', type: 'button', title: t('spiel.vote.up'), 'aria-label': t('spiel.vote.up'), 'aria-pressed': 'false' }, t('spiel.vote.upBtn'));
+  const dnB = el('button', { class: 'vbtn vbtn-down', type: 'button', title: t('spiel.vote.down'), 'aria-label': t('spiel.vote.down'), 'aria-pressed': 'false' }, t('spiel.vote.downBtn'));
+  const pkB = el('button', { class: 'vbtn vbtn-peak', type: 'button', title: t('spiel.vote.peak'), 'aria-label': t('spiel.vote.peak'), 'aria-pressed': 'false' }, '⛰️ ' + t('spiel.vote.peakBtn'));
+  const mehB = el('button', { class: 'vbtn vbtn-meh', type: 'button', title: t('spiel.vote.meh'), 'aria-label': t('spiel.vote.meh'), 'aria-pressed': 'false' }, '😐 ' + t('spiel.vote.mehBtn'));
+  const submitB = el('button', { class: 'btn btn-primary', type: 'button' }, t('spiel.vote.submit'));
   const timerWrap = el('div', { class: 'timerbar', 'aria-hidden': 'true' }, el('i'));
   const secs = el('span', { class: 'vote-secs', 'aria-hidden': 'true' });
   const step = el('p', { class: 'vote-step', 'aria-live': 'polite' });
+  const ownNote = el('p', { class: 'vote-own-note', hidden: true }, '🙈 ' + t('spiel.vote.ownBlocked'));
+  const dots = el('div', { class: 'vote-dots', 'aria-hidden': 'true' });
+  const dotBtns = list.map((m, i) => el('span', { class: 'vote-dot' }, String(i + 1)));
+  dots.append(...dotBtns);
+
+  function isMine() { return list[idx].playerId === myId; }
 
   function sendVote() {
+    if (sent) return;
     sent = true;
-    clearInterval(timer);
-    clearTimeout(autoTimer);
-    autoTimer = null;
-    room?.send({ type: 'vote', selfId: room.selfId, ups: [...ups], downs: [...downs], peak });
+    room?.send({ type: 'vote', selfId: room.selfId, ups: [...ups], downs: [...downs], mehs: [...mehs], peak });
+    paint();
+  }
+
+  function editVote() {
+    if (!sent || ended) return;
+    sent = false;
     paint();
   }
 
   function paint() {
     const cur = list[idx];
+    const mine = cur.playerId === myId;
     upB.classList.toggle('active', ups.has(cur.playerId));
     dnB.classList.toggle('active', downs.has(cur.playerId));
+    mehB.classList.toggle('active', mehs.has(cur.playerId));
     pkB.classList.toggle('active', peak === cur.playerId);
+    upB.setAttribute('aria-pressed', String(ups.has(cur.playerId)));
+    dnB.setAttribute('aria-pressed', String(downs.has(cur.playerId)));
+    mehB.setAttribute('aria-pressed', String(mehs.has(cur.playerId)));
     pkB.setAttribute('aria-pressed', String(peak === cur.playerId));
-    upB.disabled = dnB.disabled = pkB.disabled = sent;
-    step.textContent = sent ? t('spiel.vote.wait') : `${idx + 1} / ${list.length}`;
+    upB.disabled = dnB.disabled = pkB.disabled = mehB.disabled = sent || mine || ended;
+    dotBtns.forEach((b, i) => b.classList.toggle('active', i === idx));
+    ownNote.hidden = !mine;
+    submitB.disabled = ended;
+    submitB.textContent = sent ? t('spiel.vote.edit') : t('spiel.vote.submit');
+    submitB.classList.toggle('btn-blue', sent);
+    submitB.classList.toggle('btn-primary', !sent);
+    step.textContent = ended ? t('spiel.vote.wait') : sent ? t('spiel.vote.submitted') : `${idx + 1} / ${list.length}`;
   }
 
   async function show() {
     const seq = ++showSeq;
     const m = list[idx];
     meta.textContent = m.name;
+    paint();
     if (!cache[m.playerId]) {
       const tpl = await resolveTpl(m.tplKey);
-      // Fehlendes Template: Meme ohne Stimme überspringen statt hängen zu bleiben.
-      if (!tpl) { decide(); if (!sent) go(1); return; }
+      if (!tpl) {
+        if (seq !== showSeq) return;
+        img.removeAttribute('src');
+        paint();
+        return;
+      }
       cache[m.playerId] = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom, layers: m.layers });
     }
-    if (seq !== showSeq) return; // spätes Rendern eines alten Memes ignorieren
+    if (seq !== showSeq) return;
     img.src = cache[m.playerId];
     paint();
-    if (!sent) startTimer();
-  }
-
-  function startTimer() {
-    clearInterval(timer);
-    const bar = timerWrap.firstElementChild;
-    let left = perMeme;
-    bar.style.width = '100%';
-    timerWrap.classList.remove('warn');
-    secs.textContent = left + ' s';
-    timer = setInterval(() => {
-      if (sent || !img.isConnected) { clearInterval(timer); return; }
-      left = Math.max(0, left - 0.25);
-      secs.textContent = Math.ceil(left) + ' s';
-      bar.style.width = `${(left / perMeme) * 100}%`;
-      timerWrap.classList.toggle('warn', left <= Math.min(3, perMeme / 2));
-      if (left <= 0) {
-        clearInterval(timer);
-        decide(); // abgelaufen = entschieden ohne Stimme
-        if (!sent) go(1);
-      }
-    }, 250);
-  }
-
-  // Nach Up/Down-Vote kurz warten (450 ms), dann weiter – nie doppelt, nie am Ende.
-  function scheduleAdvance() {
-    clearTimeout(autoTimer);
-    if (sent || idx >= list.length - 1) return;
-    autoTimer = setTimeout(() => {
-      autoTimer = null;
-      if (sent || !img.isConnected || idx >= list.length - 1) return;
-      go(1);
-    }, 450);
-  }
-
-  function go(delta) {
-    clearInterval(timer); // alte Meme-Uhr nicht weiterlaufen lassen
-    clearTimeout(autoTimer);
-    autoTimer = null;
-    const next = Math.min(list.length - 1, Math.max(0, idx + delta));
-    if (next !== idx) { idx = next; show(); }
   }
 
   upB.addEventListener('click', () => {
-    if (sent) return;
+    if (sent || ended || isMine()) return;
     const id = list[idx].playerId;
-    if (ups.has(id)) ups.delete(id); else { downs.delete(id); ups.add(id); }
-    decide(true);
+    if (ups.has(id)) ups.delete(id); else { downs.delete(id); mehs.delete(id); ups.add(id); }
+    paint();
   });
   dnB.addEventListener('click', () => {
-    if (sent) return;
+    if (sent || ended || isMine()) return;
     const id = list[idx].playerId;
-    if (downs.has(id)) downs.delete(id); else { ups.delete(id); downs.add(id); }
-    decide(true);
+    if (downs.has(id)) downs.delete(id); else { ups.delete(id); mehs.delete(id); downs.add(id); }
+    paint();
+  });
+  mehB.addEventListener('click', () => {
+    if (sent || ended || isMine()) return;
+    const id = list[idx].playerId;
+    if (mehs.has(id)) mehs.delete(id); else { ups.delete(id); downs.delete(id); mehs.add(id); }
+    paint();
   });
   pkB.addEventListener('click', () => {
-    if (sent) return;
+    if (sent || ended || isMine()) return;
     peak = peak === list[idx].playerId ? null : list[idx].playerId;
     paint();
   });
+  submitB.addEventListener('click', () => { if (sent) editVote(); else sendVote(); });
 
-  function decide(advance = false) {
-    if (sent) return;
-    decided.add(list[idx].playerId);
-    paint();
-    if (decided.size === list.length) { sendVote(); return; }
-    if (advance) scheduleAdvance();
-  }
+  // Eine gemeinsame Uhr: alle Geräte zeigen denselben Index, auch wenn das eigene Meme dran ist.
+  clock = setInterval(() => {
+    if (!img.isConnected) { clearInterval(clock); return; }
+    const elapsed = Date.now() - startedAt;
+    const total = list.length * perMeme * 1000;
+    if (elapsed >= total) {
+      clearInterval(clock);
+      ended = true;
+      secs.textContent = '0 s';
+      timerWrap.firstElementChild.style.width = '0%';
+      sendVote();
+      paint();
+      return;
+    }
+    const next = Math.floor(elapsed / (perMeme * 1000));
+    const left = perMeme - (elapsed % (perMeme * 1000)) / 1000;
+    secs.textContent = Math.ceil(left) + ' s';
+    timerWrap.firstElementChild.style.width = `${(left / perMeme) * 100}%`;
+    timerWrap.classList.toggle('warn', left <= 3);
+    if (next !== idx) { idx = next; show(); }
+  }, 100);
 
   app.innerHTML = '';
   app.append(el('div', { class: 'wrap phase-screen vote-screen' },
     el('h1', {}, t('spiel.vote.title')),
     el('div', { class: 'card turn-box vote-card-live' },
       el('p', { class: 'vote-hint' }, t('spiel.vote.hint')),
-      img,
-      meta,
-      el('div', { class: 'vote-btns vote-btns-live' }, upB, dnB, pkB),
-      el('div', { class: 'vote-nav' },
-        el('button', { class: 'btn btn-sm', type: 'button', onclick: () => go(-1) }, '← ' + t('spiel.vote.back')),
-        el('button', { class: 'btn btn-sm btn-blue', type: 'button', onclick: () => { decide(); if (!sent) go(1); } }, '→ ' + t('spiel.vote.skip')),
+      ownNote,
+      el('div', { class: 'vote-main' },
+        el('div', { class: 'vote-media' },
+          img,
+          meta,
+          dots,
+        ),
+        el('div', { class: 'vote-controls' },
+          el('p', { class: 'vote-timing' }, t('spiel.vote.timing')),
+          el('div', { class: 'vote-btns vote-btns-live' }, upB, pkB, dnB, mehB),
+          el('div', { class: 'vote-timer' }, timerWrap, secs),
+          el('div', { class: 'vote-submit-row' }, submitB),
+          step,
+        ),
       ),
-      el('div', { class: 'vote-timer' }, timerWrap, secs),
-      step,
     ),
   ));
   window.scrollTo(0, 0);
   show();
 }
 
+function memeFileName(m, rank) {
+  const safe = String(m.name || 'meme')
+    .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'meme';
+  return `meme-${String(rank).padStart(2, '0')}-${safe}${m.round ? `-r${m.round}` : ''}.jpg`;
+}
+
+function voteSummary(m) {
+  return [
+    m.up?.length ? t('spiel.vote.upBtn') + ': ' + m.up.join(', ') : null,
+    m.down?.length ? t('spiel.vote.downBtn') + ': ' + m.down.join(', ') : null,
+    m.meh?.length ? t('spiel.vote.mehBtn') + ': ' + m.meh.join(', ') : null,
+    m.peaks ? t('spiel.vote.peakBtn') + ' ×' + m.peaks : null,
+  ].filter(Boolean).join('  ·  ') || '—';
+}
+
+/** Galerie für Runden-Review und Game-Review; liefert Karten + Download-Daten. */
+function buildMemeReview(memes) {
+  const grid = el('div', { class: 'review-grid' });
+  const items = memes.map((m, i) => {
+    const img = el('img', { class: 'review-img', alt: '', loading: 'lazy' });
+    const dl = el('a', {
+      class: 'btn btn-sm review-dl', download: memeFileName(m, i + 1),
+      'aria-disabled': 'true', href: '#',
+    }, '⬇ ' + t('spiel.review.download'));
+    grid.append(el('article', { class: 'review-card' },
+      el('span', { class: 'review-rank' }, '#' + (i + 1)),
+      el('div', { class: 'review-img-wrap' }, img),
+      el('div', { class: 'review-meta' },
+        el('strong', {}, m.name, m.round ? el('span', { class: 'review-round' }, ` · R${m.round}`) : null),
+        el('span', { class: 'review-pts' }, `${m.pts ?? 0} P.`),
+      ),
+      el('div', { class: 'voters' }, voteSummary(m)),
+      dl,
+    ));
+    const item = { m, url: null, promise: null };
+    item.promise = (async () => {
+      const tpl = await resolveTpl(m.tplKey);
+      if (!tpl) return null;
+      const url = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom, layers: m.layers }, 900);
+      item.url = url;
+      img.src = url;
+      dl.href = url;
+      dl.removeAttribute('aria-disabled');
+      return url;
+    })().catch(() => null);
+    return item;
+  });
+  return { grid, items };
+}
+
+async function dataUrlBytes(url) {
+  const res = await fetch(url);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+function saveBlob(blob, filename) {
+  const a = el('a', { href: URL.createObjectURL(blob), download: filename });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+
 function doResult(msg) {
+  lanState.phase = 'review';
   const app = document.getElementById('app');
   const isFinal = msg.round >= msg.rounds;
-  const rows = el('div', { class: 'result-list' });
-  for (const s of msg.scores) {
-    const img = el('img', { alt: s.name });
-    (async () => {
-      const tpl = await resolveTpl(s.tplKey);
-      if (tpl) img.src = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: s.top, bottom: s.bottom, layers: s.layers });
-    })();
-    rows.append(el('div', { class: `result-row${s.pts === Math.max(...msg.scores.map((x) => x.pts)) && s.pts > 0 ? ' winner' : ''}` },
-      img,
-      el('div', {}, el('div', { style: 'font-weight:800' }, s.name), el('div', { class: 'voters' },
-        [s.up?.length ? '👍 ' + s.up.join(', ') : null, s.down?.length ? '👎 ' + s.down.join(', ') : null, s.peaks ? '⛰️ ×' + s.peaks : null].filter(Boolean).join('  ·  ') || '—')),
-      el('div', { class: 'pts' }, String(s.pts)),
-    ));
+  const isHost = lanState.hostId === lanState.room?.selfId;
+  const autoNext = !!msg.autoNext;
+  const advanceIn = Number(msg.advanceIn) || 0;
+  const { grid } = buildMemeReview(msg.scores);
+
+  const action = isHost
+    ? el('button', {
+      class: 'btn btn-primary', type: 'button',
+      onclick: (e) => {
+        e.currentTarget.disabled = true;
+        e.currentTarget.textContent = t('spiel.review.waitHost');
+        window.__lanAdvanceReview?.();
+      },
+    }, autoNext ? t('spiel.review.now') : (isFinal ? t('spiel.review.final') : t('spiel.review.next')))
+    : (autoNext ? null : el('p', { class: 'review-wait', role: 'status' }, '⏳ ' + t('spiel.review.waitHost')));
+
+  const autoStatus = autoNext && advanceIn > 0
+    ? el('p', { class: 'review-countdown', 'aria-live': 'polite' }, t('spiel.review.autoIn', { n: advanceIn }))
+    : null;
+  if (autoStatus) {
+    let left = advanceIn;
+    const iv = setInterval(() => {
+      if (!autoStatus.isConnected) { clearInterval(iv); return; }
+      left -= 1;
+      if (left <= 0) { clearInterval(iv); autoStatus.textContent = t('spiel.review.autoNow'); }
+      else autoStatus.textContent = t('spiel.review.autoIn', { n: left });
+    }, 1000);
   }
 
-  // Kleiner Countdown, passend zur Host-Pause von 5,2 s; keine Protokolländerung.
-  const hint = el('p', { class: 'next-hint', role: 'status', 'aria-live': 'polite' });
-  let left = 5;
-  const paintHint = () => {
-    hint.textContent = left > 0
-      ? t(isFinal ? 'spiel.result.finalIn' : 'spiel.result.nextIn', { n: left })
-      : t(isFinal ? 'spiel.result.finalNow' : 'spiel.result.nextNow');
-  };
-  paintHint();
-  const iv = setInterval(() => {
-    if (!hint.isConnected) { clearInterval(iv); return; }
-    left -= 1;
-    paintHint();
-    if (left <= 0) clearInterval(iv);
-  }, 1000);
-
   app.innerHTML = '';
-  app.append(el('div', { class: 'wrap phase-screen' },
-    el('h1', {}, `${t('spiel.result.title')} · ${msg.round}/${msg.rounds}`),
-    el('div', { class: 'card' }, rows),
-    hint,
+  app.append(el('div', { class: 'wrap phase-screen review-screen' },
+    el('h1', {}, '🏆 ' + t('spiel.review.title')),
+    el('p', { class: 'review-sub' }, `${t('spiel.review.round', { n: msg.round, total: msg.rounds })} · ${t('spiel.review.subtitle')}`),
+    grid,
+    el('div', { class: 'review-actions' }, action, autoStatus),
   ));
   window.scrollTo(0, 0);
 }
 
 function doFinal(msg) {
+  lanState.phase = 'final';
   confetti();
   const app = document.getElementById('app');
   const medals = ['🥇', '🥈', '🥉'];
-  const bestCard = msg.best?.length ? el('div', { class: 'card', style: 'margin-top:14px' },
-    el('h2', {}, '🔥 ' + t('spiel.final.best')),
-    el('div', { class: 'vote-grid' },
-      ...msg.best.map((m) => {
-        const img = el('img', { alt: m.name });
-        (async () => {
-          const tpl = await resolveTpl(m.tplKey);
-          if (tpl) img.src = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom, layers: m.layers });
-        })();
-        return el('div', { class: 'vote-card' }, img, el('div', { class: 'vote-meta' }, m.name, ' · ' + m.pts + ' P.'));
-      }),
-    ),
-  ) : null;
+  const allMemes = (msg.allMemes?.length ? msg.allMemes : msg.best || [])
+    .slice().sort((a, b) => (b.pts || 0) - (a.pts || 0));
+  const { grid, items } = buildMemeReview(allMemes);
+
+  const zipBtn = el('button', { class: 'btn btn-primary', type: 'button' }, '⬇ ' + t('spiel.final.zip'));
+  zipBtn.addEventListener('click', async () => {
+    const label = zipBtn.textContent;
+    zipBtn.disabled = true;
+    zipBtn.textContent = t('spiel.final.zipping');
+    try {
+      const urls = await Promise.all(items.map((it) => it.url || it.promise));
+      const files = [];
+      for (let i = 0; i < items.length; i++) {
+        const url = urls[i];
+        if (!url) continue;
+        files.push({ name: memeFileName(items[i].m, i + 1), data: await dataUrlBytes(url) });
+      }
+      if (!files.length) throw new Error('keine Memes');
+      saveBlob(createZip(files), 'meme-manufaktur-alle-memes.zip');
+    } catch (e) {
+      console.error(e);
+      toast('⚠️ ' + t('spiel.final.zipFailed'));
+    } finally {
+      zipBtn.disabled = false;
+      zipBtn.textContent = label;
+    }
+  });
 
   // Zurück zur Startseite/Lobby und den Raum sauber schließen.
   function replay() {
     lanState.room?.close();
     lanState.room = null;
     window.__mmInGame = false;
+    window.__mmLeaveGame = null;
+    clearTimeout(lanState.reviewTimer);
+    lanState.reviewTimer = null;
+    lanState.reviewAdvance = null;
+    document.body.classList.remove('in-game');
     if (location.hash === '#/spiel') window.dispatchEvent(new CustomEvent('mm:goto', { detail: '#/spiel' }));
     else location.hash = '#/spiel';
   }
 
   app.innerHTML = '';
-  app.append(el('div', { class: 'wrap phase-screen' },
+  app.append(el('div', { class: 'wrap phase-screen final-screen' },
     el('h1', {}, '👑 ' + t('spiel.final.title')),
     el('div', { class: 'card' },
       el('h2', {}, '🏆 ' + t('spiel.final.podium')),
@@ -867,7 +1091,16 @@ function doFinal(msg) {
         )),
       ),
     ),
-    bestCard,
+    el('section', { class: 'final-review' },
+      el('div', { class: 'final-review-head' },
+        el('div', {},
+          el('h2', {}, '🖼️ ' + t('spiel.final.reviewTitle')),
+          el('p', { class: 'review-sub' }, t('spiel.final.reviewLead')),
+        ),
+        zipBtn,
+      ),
+      grid,
+    ),
     el('div', { class: 'final-actions' },
       el('button', { class: 'btn btn-primary', type: 'button', onclick: replay }, '🔁 ' + t('spiel.final.again')),
     ),
@@ -879,9 +1112,14 @@ function doFinal(msg) {
 window.__lanHostStart = function (cfg, room, playersMap, myId) {
   lanState.cfg = cfg;
   lanState.room = room;
+  lanState.hostId = myId;
   lanState.rounds = cfg.rounds;
   lanState.totals = new Map([...playersMap.keys()].map((id) => [id, 0]));
   lanState.allMemes = [];
+  lanState.tpls = {};
+  clearTimeout(lanState.reviewTimer);
+  lanState.reviewTimer = null;
+  lanState.reviewAdvance = null;
   lanState.collecting = false;
   lanState.voting = false;
   const playerList = [...playersMap.entries()].map(([id, name]) => ({ id, name }));
@@ -905,6 +1143,7 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
       const tpl = await resolveTpl(k);
       if (tpl) tpls[k] = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: '', bottom: '' }, 900);
     }
+    lanState.tpls = tpls;
 
     // Turn-Phase: alle erstellen parallel, gemeinsames Zeitfenster
     const until = Date.now() + cfg.timeSec * 1000;
@@ -912,7 +1151,7 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
     for (let i = 0; i < playerList.length; i++) {
       room.send({
         type: 'turn', playerId: playerList[i].id, name: playerList[i].name, round: r,
-        theme, tplKey: tplKeys[i], tpls, until,
+        theme, tplKey: tplKeys[i], tpls, until, timeSec: cfg.timeSec,
       });
     }
     let turnDone = false;
@@ -928,15 +1167,15 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
       }
       startVoting();
     };
-    const turnTimer = setTimeout(finishTurn, cfg.timeSec * 1000 + 400);
+    const turnTimer = setTimeout(finishTurn, cfg.timeSec * 1000 + 1500);
     // Wenn alle Captions da sind, geht es sofort ins Voting
     lanState.turnAdvance = () => {
       if (playerList.every((p) => lanState.memes.some((m) => m.playerId === p.id))) finishTurn();
     };
 
     function startVoting() {
-      const memes = lanState.memes.map((m) => ({ playerId: m.playerId, name: m.name, top: m.top, bottom: m.bottom, layers: m.layers, tplKey: m.tplKey }));
-      // Alle voten gleichzeitig
+      const memes = shuffle(lanState.memes.map((m) => ({ playerId: m.playerId, name: m.name, top: m.top, bottom: m.bottom, layers: m.layers, tplKey: m.tplKey })));
+      // Alle voten gleichzeitig in derselben zufälligen Reihenfolge
       lanState.voting = true;
       for (const v of playerList) {
         room.send({ type: 'voting-start', myId: v.id, memes, tpls });
@@ -946,10 +1185,10 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
         if (voteDone) return;
         voteDone = true;
         lanState.voting = false;
-        for (const v of playerList) if (!lanState.votes.some((x) => x.selfId === v.id)) lanState.votes.push({ selfId: v.id, ups: [], downs: [], peak: null });
+        for (const v of playerList) if (!lanState.votes.some((x) => x.selfId === v.id)) lanState.votes.push({ selfId: v.id, ups: [], downs: [], mehs: [], peak: null });
         tally();
       };
-      setTimeout(finishVote, (cfg.timeSec + 20) * 1000);
+      setTimeout(finishVote, Math.max(35, playerList.length * 10 + 15) * 1000);
       // Wenn alle abgestimmt haben, Auswertung sofort
       lanState.voteAdvance = () => {
         if (playerList.every((p) => lanState.votes.some((x) => x.selfId === p.id))) finishVote();
@@ -957,44 +1196,36 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
     }
 
     function tally() {
-      // Punkte: ±1000 relativ zur Spielerzahl (up − down), dazu +10 pro ⛰️ PEAK aufs Meme
-      const denom = Math.max(1, playerList.length - 1);
-      const nameOf = (id) => playerList.find((p) => p.id === id)?.name || '?';
-      const peakCount = {};
-      for (const v of lanState.votes) if (v.peak) peakCount[v.peak] = (peakCount[v.peak] || 0) + 1;
-      const scores = lanState.memes.map((m) => {
-        const up = lanState.votes.filter((v) => (v.ups || []).includes(m.playerId)).map((v) => nameOf(v.selfId));
-        const down = lanState.votes.filter((v) => (v.downs || []).includes(m.playerId)).map((v) => nameOf(v.selfId));
-        const peaks = peakCount[m.playerId] || 0;
-        const pts = Math.round(1000 * (up.length - down.length) / denom) + peaks * 10;
-        return { ...m, pts, up, down, peaks };
-      }).sort((a, b) => b.pts - a.pts);
-      if (!cfg.relaxed) {
-        for (const s of scores) lanState.totals.set(s.playerId, (lanState.totals.get(s.playerId) || 0) + s.pts);
-        // Wer den PEAK gesetzt hat, bekommt die Hälfte des End-Scores dieses Memes (auch negativ)
-        const byId = new Map(scores.map((s) => [s.playerId, s]));
-        for (const v of lanState.votes) if (v.peak && byId.has(v.peak)) lanState.totals.set(v.selfId, (lanState.totals.get(v.selfId) || 0) + Math.round(byId.get(v.peak).pts / 2));
-      }
+      // Punkte: ±1000 relativ zur Spielerzahl (Krocha − Gschissn), dazu +10 pro ⛰️ Peak.
+      const scores = scoreRound({ memes: lanState.memes, votes: lanState.votes, players: playerList, round: r });
+      if (!cfg.relaxed) applyTotals(lanState.totals, scores, lanState.votes);
 
       lanState.allMemes.push(...scores);
       const isLast = r >= lanState.rounds;
-      room.send({ type: 'result', round: r, rounds: lanState.rounds, scores });
+      const autoNext = !!cfg.autoNext;
+      const advanceIn = autoNext ? 10 : 0;
+      room.send({ type: 'result', round: r, rounds: lanState.rounds, scores, autoNext, advanceIn });
 
-      setTimeout(() => {
+      // Review bleibt stehen, bis der Host weiterklickt – oder läuft automatisch weiter.
+      let advanced = false;
+      clearTimeout(lanState.reviewTimer);
+      lanState.reviewAdvance = () => {
+        if (advanced) return;
+        advanced = true;
+        clearTimeout(lanState.reviewTimer);
+        lanState.reviewTimer = null;
+        lanState.reviewAdvance = null;
         if (isLast) {
           const standings = playerList
             .map((p) => ({ id: p.id, name: p.name, pts: lanState.totals.get(p.id) || 0 }))
             .sort((a, b) => b.pts - a.pts);
-          // Die besten 5 Memes des gesamten Spiels
-          const best = [...lanState.allMemes]
-            .sort((a, b) => b.pts - a.pts)
-            .slice(0, 5)
-            .map((m) => ({ playerId: m.playerId, name: m.name, top: m.top, bottom: m.bottom, layers: m.layers, tplKey: m.tplKey, pts: m.pts }));
-          room.send({ type: 'final', standings, relaxed: cfg.relaxed, best });
+          const allMemes = [...lanState.allMemes].sort((a, b) => b.pts - a.pts);
+          room.send({ type: 'final', standings, relaxed: cfg.relaxed, best: allMemes.slice(0, 5), allMemes });
         } else {
           runRound(r + 1);
         }
-      }, 5200);
+      };
+      if (autoNext) lanState.reviewTimer = setTimeout(() => lanState.reviewAdvance?.(), advanceIn * 1000);
     }
   }
 
@@ -1004,8 +1235,29 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
 
 window.__lanHostVote = function (msg) {
   if (!lanState.voting) return; // späte Stimmen nach der Auswertung ignorieren
-  if (!lanState.votes.some((v) => v.selfId === msg.selfId)) {
-    lanState.votes.push({ selfId: msg.selfId, ups: msg.ups || [], downs: msg.downs || [], peak: msg.peak || null });
-  }
+  const next = { selfId: msg.selfId, ups: msg.ups || [], downs: msg.downs || [], mehs: msg.mehs || [], peak: msg.peak || null };
+  const existing = lanState.votes.find((v) => v.selfId === msg.selfId);
+  if (existing) Object.assign(existing, next);
+  else lanState.votes.push(next);
   lanState.voteAdvance?.();
+};
+
+window.__lanHostReroll = async function (msg) {
+  if (!lanState.collecting || lanState.phase !== 'turn' || !msg?.selfId) return;
+  if (!lanState.players.some((p) => p.id === msg.selfId)) return;
+  const current = lanState.assignments.get(msg.selfId);
+  const pool = (await templateKeyPool()).filter((key) => key !== current);
+  if (!pool.length) return;
+  const tplKey = rand(pool);
+  const tpl = await resolveTpl(tplKey);
+  if (!tpl) return;
+  const dataUrl = await renderMemeToDataUrl({ blob: tpl.blob, id: tplKey, top: '', bottom: '' }, 900);
+  lanState.assignments.set(msg.selfId, tplKey);
+  lanState.tpls = lanState.tpls || {};
+  lanState.tpls[tplKey] = dataUrl;
+  lanState.room?.send({ type: 'rerolled', playerId: msg.selfId, tplKey, name: tpl.name, tpl: dataUrl });
+};
+
+window.__lanAdvanceReview = function () {
+  lanState.reviewAdvance?.();
 };

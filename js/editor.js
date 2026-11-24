@@ -214,6 +214,11 @@ export class MemeCanvas {
     return new Promise((res) => this.canvas.toBlob(res, type, quality));
   }
 
+  /** Objekt-URL freigeben, wenn die Instanz nicht mehr gebraucht wird. */
+  dispose() {
+    if (this._url) { URL.revokeObjectURL(this._url); this._url = null; }
+  }
+
   // ---------- Pointer-Interaktion ----------
   bindPointer() {
     const cv = this.canvas;
@@ -294,6 +299,7 @@ export async function renderMemeToDataUrl({ blob, top = '', bottom = '', id = ''
   }
   mc.render();
   return mc.toBlob('image/jpeg', 0.85).then((b) => {
+    mc.dispose();
     return new Promise((res) => {
       const fr = new FileReader();
       fr.onload = () => res(fr.result);

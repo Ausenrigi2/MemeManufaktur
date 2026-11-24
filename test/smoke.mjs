@@ -172,6 +172,22 @@ test('Private Entries: nur für den Eigentümer sichtbar', async () => {
   assert.equal((await apiPost('/api/vote', { id }, b.cookie)).status, 404, 'fremde private Einträge sind nicht votebar');
 });
 
+test('Geteilte Account-Uploads sind öffentlich sichtbar und votebar', async () => {
+  const owner = await auth('/api/register', { email: `shared-owner-${Date.now()}@test.dev`, password: 'geheim123' });
+  const id = 'smoke_shared_' + Math.random().toString(36).slice(2, 8);
+  assert.equal((await post({ id, data: PNG1, shared: true }, owner.cookie)).status, 200);
+  const anon = await (await getAs('/api/library')).json();
+  const entry = anon.find((x) => x.id === id);
+  assert.ok(entry, 'geteilter Eintrag fehlt anonym');
+  assert.equal(entry.public, true);
+  assert.ok(!('owner' in entry));
+  assert.equal((await getAs(`/uploads/${id}`)).status, 200, 'geteiltes Bild braucht keine Session');
+  const other = await auth('/api/register', { email: `shared-other-${Date.now()}@test.dev`, password: 'geheim123' });
+  const voted = await apiPost('/api/vote', { id }, other.cookie);
+  assert.equal(voted.status, 200);
+  assert.equal((await voted.json()).votes, 1);
+});
+
 test('Quota: zweite Upload über Grenze -> 413', async () => {
   const a = await auth('/api/login', { email: 'alice@test.dev', password: 'geheim123' });
   const me = await (await getAs('/api/me', a.cookie)).json();
@@ -187,7 +203,10 @@ test('Voting: Konto nötig, Toggle pro Account, Sortierung nach Stimmen', async 
   const v1 = await apiPost('/api/vote', { id }, c.cookie);
   assert.equal((await v1.json()).votes, 1);
   const list = await (await getAs('/api/library', c.cookie)).json();
-  assert.equal(list[0].id, id, 'meistgestimmter Entry muss oben stehen');
+  const idx = list.findIndex((x) => x.id === id);
+  const firstZero = list.findIndex((x) => (x.votes || []).length === 0);
+  assert.ok(idx >= 0, 'eigener Eintrag fehlt');
+  assert.ok(firstZero === -1 || idx < firstZero, 'meistgestimmter Entry muss vor 0-Stimmen stehen');
   const v2 = await apiPost('/api/vote', { id }, c.cookie);
   assert.equal((await v2.json()).votes, 0); // nochmal treffen = entvotescht
 });
