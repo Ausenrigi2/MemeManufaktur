@@ -114,9 +114,10 @@ in your browser.
    Templates come from the server library, so upload a few pictures on the
    Packs page before the first game.
 4. After every caption is in (or the timer runs out), all players see the same
-   randomly ordered memes, one per 10 seconds. Upvote (**Krocha**), peak,
-   downvote (**Gschissn**) or stay neutral (**Najo**) — your own meme is
-   greyed out for you.
+   randomly ordered memes, one per 20 seconds. Upvote (**Krocha**), peak,
+   downvote (**Gschissn**) or stay neutral (**Najo**) — your choice counts
+   immediately, and your own meme is greyed out for you. Votes stay anonymous;
+   only a peak shows who gave it.
 5. Each round ends in a review with all memes sorted by points and a download
    button per meme. The host (or the auto timer) starts the next round. The
    finale shows every meme of the game and downloads them all as one ZIP.
@@ -224,7 +225,7 @@ rsync) if the host itself can fail.
 | `/ws?room=CODE&name=NAME&self=ID&pub=1&lobby=NAME` | WS | Game relay — the first connection registers the lobby; join, roster, round state, votes |
 
 Limits: 25 MB per uploaded image, 250 MB per account, 500 MB for the shared
-anonymous library, 8 MB per WebSocket message. SVG uploads are rejected on
+anonymous library, 16 MB per WebSocket message. SVG uploads are rejected on
 purpose: SVG can carry scripts and would run in the app origin. Only PNG, JPEG,
 GIF and WebP are accepted, detected by magic bytes.
 

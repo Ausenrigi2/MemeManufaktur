@@ -25,7 +25,7 @@ const ANON_QUOTA_BYTES = Number(process.env.MEME_ANON_QUOTA_BYTES || 500 * 1024 
 const MAX_JSON_BODY = 64 * 1024;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const MAX_BODY_BYTES = Math.ceil(MAX_UPLOAD_BYTES * 4 / 3) + 1024 * 1024; // Base64-Puffer + JSON-Rahmen
-const MAX_WS_BYTES = 8 * 1024 * 1024;      // 8 MB pro WS-Nachricht
+const MAX_WS_BYTES = 16 * 1024 * 1024;     // 16 MB pro WS-Nachricht (GIF-Templates)
 // Client-Mimes, die beim Serven erlaubt sind – alles andere fällt auf den Dateityp zurück (XSS-Schutz)
 const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 // Nur diese Pfade werden statisch ausgeliefert. Insbesondere data/, .git/,

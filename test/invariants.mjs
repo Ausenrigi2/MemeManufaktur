@@ -75,8 +75,11 @@ test('scoreRound zählt Krocha, Gschissn, Najo und Peak korrekt', () => {
   ];
   const scores = scoreRound({ memes, votes, players, round: 2 });
   assert.deepEqual(scores.map((s) => [s.playerId, s.pts]), [['a', 510], ['b', 510], ['c', -490]]);
-  assert.deepEqual(scores[0].up, ['Ben']);
-  assert.deepEqual(scores[1].meh, ['Cleo']);
+  // Krocha/Gschissn/Najo nur als Anzahl; Peaks nennen die Person.
+  assert.equal(scores[0].up, 1);
+  assert.equal(scores[1].meh, 1);
+  assert.deepEqual(scores[0].peakBy, ['Cleo']);
+  assert.deepEqual(scores[1].peakBy, ['Anna']);
   assert.equal(scores[0].round, 2);
 
   const totals = applyTotals(new Map(players.map((p) => [p.id, 0])), scores, votes);

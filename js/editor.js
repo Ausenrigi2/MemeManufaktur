@@ -82,9 +82,15 @@ export class MemeCanvas {
   // animierten GIFs ein echtes <img> unter dem Canvas; der Canvas malt nur
   // noch transparente Text-Ebenen. Das animiert nativ und kostet kein CPU-Loop.
   startAnimation() {
-    if (!this._gif || this._animFrame || this._overlayActive) return;
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
-    if (this.canvas.isConnected) { this._activateGifLayer(); return; }
+    if (!this._gif || this._overlayActive) return;
+    // Expliziter Aufruf nach dem Einhängen gewinnt gegen einen noch laufenden
+    // rAF-Warteloop (wichtig in Hintergrund-Tabs, die rAF drosseln).
+    if (this.canvas.isConnected) {
+      this.stopAnimation();
+      this._activateGifLayer();
+      return;
+    }
+    if (this._animFrame) return;
     const waitForDom = () => {
       this._animFrame = 0;
       if (!this._gif || this._overlayActive) return;

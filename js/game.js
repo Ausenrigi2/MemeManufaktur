@@ -121,7 +121,7 @@ const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
 // Server-Templates laden Gäste direkt (GIFs bleiben animiert und HTTP-gecacht).
 // Lokale Templates müssen durch den WebSocket; kleine GIFs bleiben dabei GIF,
 // alles andere (und zu große GIFs) geht als kompaktes JPEG raus.
-const GIF_WS_LIMIT = 3 * 1024 * 1024;
+const GIF_WS_LIMIT = 8 * 1024 * 1024;
 async function guestTemplatePayload(tpl, gifBudget = GIF_WS_LIMIT) {
   if (tpl.blob?.type === 'image/gif' && tpl.blob.size <= Math.min(GIF_WS_LIMIT, gifBudget)) {
     return { data: await blobToDataUrl(tpl.blob), gifBytes: tpl.blob.size };
@@ -571,7 +571,7 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
 }
 
 // ---------- LAN Host/Guest-Phasen (auf Modulebene, da Closure-Shared-State nötig) ----------
-const lanState = { cfg: null, room: null, round: 0, rounds: 3, memes: [], votes: [], totals: new Map(), theme: null, players: [], assignments: new Map(), tpls: {}, turnAdvance: null, voteAdvance: null, reviewAdvance: null, reviewTimer: null, ownPacks: new Map(), collecting: false, voting: false, allMemes: [], phase: 'idle' }; // ownPacks: selfId -> [srv-Keys]
+const lanState = { cfg: null, room: null, round: 0, rounds: 3, memes: [], votes: [], totals: new Map(), theme: null, players: [], assignments: new Map(), tpls: {}, turnAdvance: null, reviewAdvance: null, reviewTimer: null, ownPacks: new Map(), collecting: false, voting: false, allMemes: [], phase: 'idle' }; // ownPacks: selfId -> [srv-Keys]
 
 /** Host: Caption aus einer „submit“-Nachricht in die laufende Runde übernehmen */
 export function handleHostSubmit(msg) {
@@ -645,12 +645,16 @@ function doTurn(msg) {
     const turnSecs = el('span', { class: 'vote-secs', 'aria-hidden': 'true' });
     const timerRow = el('div', { class: 'turn-timer' }, timerWrap, turnSecs);
 
-    function finish() {
+    async function finish() {
       if (settled) return;
       settled = true;
       clearInterval(iv);
       let preview = null;
-      try { preview = canvas.toDataURL('image/png'); } catch { /* Canvas gesperrt – ohne Vorschau weitermachen */ }
+      try {
+        // toBlob komponiert bei GIFs Bild + Text; canvas.toDataURL wäre nur Text.
+        const blob = await mc.toBlob('image/jpeg', 0.85);
+        preview = blob ? await blobToDataUrl(blob) : null;
+      } catch { /* Canvas gesperrt – ohne Vorschau weitermachen */ }
       const room = lanState.room;
       const layers = mc.layers.map((l) => ({ text: String(l.text).slice(0, 200), xF: +(l.x / mc.cw).toFixed(3), yF: +(l.y / mc.ch).toFixed(3), fsF: +(l.fontSize / base).toFixed(3) }));
       mc.destroy();
@@ -749,6 +753,9 @@ function doTurn(msg) {
         ),
       ),
     ));
+    // Canvas ist jetzt im DOM – GIF-Overlay sofort aktivieren, unabhängig
+    // davon, ob der Browser gerade requestAnimationFrame drosselt.
+    mc.startAnimation();
     window.scrollTo(0, 0);
 
     // Lokale Rundenzeit statt Geräteuhr: verhindert, dass ein Handy mit falscher Uhrzeit sofort abgibt.
@@ -807,11 +814,11 @@ function doVote(msg) {
     return;
   }
 
-  const perMeme = 10; // Sekunden pro Meme, für alle gleich
+  const perMeme = 20; // Sekunden pro Meme, für alle gleich
   const startedAt = Date.now();
   const ups = new Set(), downs = new Set(), mehs = new Set();
   const cache = {};
-  let peak = null, sent = false, ended = false, idx = 0, showSeq = 0, clock = null;
+  let peak = null, ended = false, idx = 0, showSeq = 0, clock = null;
 
   const mediaFrame = el('div', { class: 'vote-media-frame' });
   let liveView = null;
@@ -824,7 +831,6 @@ function doVote(msg) {
   const dnB = el('button', { class: 'vbtn vbtn-down', type: 'button', title: t('spiel.vote.down'), 'aria-label': t('spiel.vote.down'), 'aria-pressed': 'false' }, t('spiel.vote.downBtn'));
   const pkB = el('button', { class: 'vbtn vbtn-peak', type: 'button', title: t('spiel.vote.peak'), 'aria-label': t('spiel.vote.peak'), 'aria-pressed': 'false' }, '⛰️ ' + t('spiel.vote.peakBtn'));
   const mehB = el('button', { class: 'vbtn vbtn-meh', type: 'button', title: t('spiel.vote.meh'), 'aria-label': t('spiel.vote.meh'), 'aria-pressed': 'false' }, '😐 ' + t('spiel.vote.mehBtn'));
-  const submitB = el('button', { class: 'btn btn-primary', type: 'button' }, t('spiel.vote.submit'));
   const timerWrap = el('div', { class: 'timerbar', 'aria-hidden': 'true' }, el('i'));
   const secs = el('span', { class: 'vote-secs', 'aria-hidden': 'true' });
   const step = el('p', { class: 'vote-step', 'aria-live': 'polite' });
@@ -836,15 +842,9 @@ function doVote(msg) {
   function isMine() { return list[idx].playerId === myId; }
 
   function sendVote() {
-    if (sent) return;
-    sent = true;
+    // Ohne Abgeben-Button zählt jede Auswahl sofort; spätere Änderungen
+    // überschreiben die Stimme beim Host.
     room?.send({ type: 'vote', selfId: room.selfId, ups: [...ups], downs: [...downs], mehs: [...mehs], peak });
-    paint();
-  }
-
-  function editVote() {
-    if (!sent || ended) return;
-    sent = false;
     paint();
   }
 
@@ -859,14 +859,10 @@ function doVote(msg) {
     dnB.setAttribute('aria-pressed', String(downs.has(cur.playerId)));
     mehB.setAttribute('aria-pressed', String(mehs.has(cur.playerId)));
     pkB.setAttribute('aria-pressed', String(peak === cur.playerId));
-    upB.disabled = dnB.disabled = pkB.disabled = mehB.disabled = sent || mine || ended;
+    upB.disabled = dnB.disabled = pkB.disabled = mehB.disabled = mine || ended;
     dotBtns.forEach((b, i) => b.classList.toggle('active', i === idx));
     ownNote.hidden = !mine;
-    submitB.disabled = ended;
-    submitB.textContent = sent ? t('spiel.vote.edit') : t('spiel.vote.submit');
-    submitB.classList.toggle('btn-blue', sent);
-    submitB.classList.toggle('btn-primary', !sent);
-    step.textContent = ended ? t('spiel.vote.wait') : sent ? t('spiel.vote.submitted') : `${idx + 1} / ${list.length}`;
+    step.textContent = ended ? t('spiel.vote.wait') : `${idx + 1} / ${list.length}`;
   }
 
   async function show() {
@@ -898,29 +894,28 @@ function doVote(msg) {
   }
 
   upB.addEventListener('click', () => {
-    if (sent || ended || isMine()) return;
+    if (ended || isMine()) return;
     const id = list[idx].playerId;
     if (ups.has(id)) ups.delete(id); else { downs.delete(id); mehs.delete(id); ups.add(id); }
-    paint();
+    sendVote();
   });
   dnB.addEventListener('click', () => {
-    if (sent || ended || isMine()) return;
+    if (ended || isMine()) return;
     const id = list[idx].playerId;
     if (downs.has(id)) downs.delete(id); else { ups.delete(id); mehs.delete(id); downs.add(id); }
-    paint();
+    sendVote();
   });
   mehB.addEventListener('click', () => {
-    if (sent || ended || isMine()) return;
+    if (ended || isMine()) return;
     const id = list[idx].playerId;
     if (mehs.has(id)) mehs.delete(id); else { ups.delete(id); downs.delete(id); mehs.add(id); }
-    paint();
+    sendVote();
   });
   pkB.addEventListener('click', () => {
-    if (sent || ended || isMine()) return;
+    if (ended || isMine()) return;
     peak = peak === list[idx].playerId ? null : list[idx].playerId;
-    paint();
+    sendVote();
   });
-  submitB.addEventListener('click', () => { if (sent) editVote(); else sendVote(); });
 
   // Eine gemeinsame Uhr: alle Geräte zeigen denselben Index, auch wenn das eigene Meme dran ist.
   clock = setInterval(() => {
@@ -933,7 +928,6 @@ function doVote(msg) {
       secs.textContent = '0 s';
       timerWrap.firstElementChild.style.width = '0%';
       sendVote();
-      paint();
       return;
     }
     const next = Math.floor(elapsed / (perMeme * 1000));
@@ -960,7 +954,6 @@ function doVote(msg) {
           el('p', { class: 'vote-timing' }, t('spiel.vote.timing')),
           el('div', { class: 'vote-btns vote-btns-live' }, upB, pkB, dnB, mehB),
           el('div', { class: 'vote-timer' }, timerWrap, secs),
-          el('div', { class: 'vote-submit-row' }, submitB),
           step,
         ),
       ),
@@ -978,11 +971,12 @@ function memeFileName(m, rank) {
 }
 
 function voteSummary(m) {
+  // Stimmen anonym: nur die Anzahl. Peaks nennen die Person, die ihn gegeben hat.
   return [
-    m.up?.length ? t('spiel.vote.upBtn') + ': ' + m.up.join(', ') : null,
-    m.down?.length ? t('spiel.vote.downBtn') + ': ' + m.down.join(', ') : null,
-    m.meh?.length ? t('spiel.vote.mehBtn') + ': ' + m.meh.join(', ') : null,
-    m.peaks ? t('spiel.vote.peakBtn') + ' ×' + m.peaks : null,
+    m.up ? t('spiel.vote.upBtn') + ': ' + m.up : null,
+    m.down ? t('spiel.vote.downBtn') + ': ' + m.down : null,
+    m.meh ? t('spiel.vote.mehBtn') + ': ' + m.meh : null,
+    m.peaks ? t('spiel.vote.peakBtn') + ': ' + (m.peakBy?.join(', ') || m.peaks) : null,
   ].filter(Boolean).join('  ·  ') || '—';
 }
 
@@ -1194,7 +1188,7 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
     }
     lanState.publicSrv = publicSrv;
     const tpls = {};
-    let gifBudget = 4 * 1024 * 1024;
+    let gifBudget = 8 * 1024 * 1024;
     for (const k of new Set(tplKeys)) {
       if (publicSrv.has(k)) continue;
       const tpl = await resolveTpl(k);
@@ -1248,11 +1242,9 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
         for (const v of playerList) if (!lanState.votes.some((x) => x.selfId === v.id)) lanState.votes.push({ selfId: v.id, ups: [], downs: [], mehs: [], peak: null });
         tally();
       };
-      setTimeout(finishVote, Math.max(35, playerList.length * 10 + 15) * 1000);
-      // Wenn alle abgestimmt haben, Auswertung sofort
-      lanState.voteAdvance = () => {
-        if (playerList.every((p) => lanState.votes.some((x) => x.selfId === p.id))) finishVote();
-      };
+      // Votes zählen sofort, aber die volle Sehzeit bleibt: 20 s pro Meme
+      // plus 5 s Puffer für die letzte automatische Stimme.
+      setTimeout(finishVote, (playerList.length * 20 + 5) * 1000);
     }
 
     function tally() {
@@ -1299,7 +1291,6 @@ window.__lanHostVote = function (msg) {
   const existing = lanState.votes.find((v) => v.selfId === msg.selfId);
   if (existing) Object.assign(existing, next);
   else lanState.votes.push(next);
-  lanState.voteAdvance?.();
 };
 
 window.__lanHostReroll = async function (msg) {
