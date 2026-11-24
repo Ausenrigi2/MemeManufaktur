@@ -200,7 +200,8 @@ export function openPacks() {
     toast(t('pakete.uploading', { n: files.length }), 60000);
     try {
       const res = await Packs.uploadFiles(files, packId, { shared });
-      toast(t('pakete.uploaded', { n: res.length }));
+      if (res.failed?.length) toast('⚠️ ' + t('pakete.uploadSharedFailed', { n: res.failed.length }));
+      else toast(t('pakete.uploaded', { n: res.length }));
     } catch (e) {
       console.error(e);
       toast('⚠️ ' + t('pakete.uploadFailed'));

@@ -104,6 +104,11 @@
 
 /* ---------- Ebenen ---------- */
 .studio-panel .layer-item { gap: 6px; padding: 5px 6px; }
+.studio-panel .layer-item .layer-select {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left;
+}
+.studio-panel .layer-item .layer-select:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .studio-panel .layer-item .btn-icon { padding: 5px 7px; font-size: 0.78rem; }
 .studio-panel .layer-item .txt { min-width: 0; }
 .studio-keys { margin: 8px 0 0; color: var(--muted); font-size: 0.75rem; font-weight: 700; line-height: 1.4; }

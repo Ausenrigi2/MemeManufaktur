@@ -164,8 +164,10 @@ async function boot() {
     if (document.hidden) return;
     try {
       const r = await fetch('/health', { cache: 'no-store' });
+      ServerAPI.available = r.ok;
       updateServerStatus(r.ok);
     } catch {
+      ServerAPI.available = false;
       updateServerStatus(false);
     }
   }, 30000);

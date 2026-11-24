@@ -4,17 +4,25 @@ import { uid, toast } from './lib.js';
 const DB_NAME = 'mememanufaktur';
 const DB_VERSION = 1;
 
+let dbPromise = null;
 function openDB() {
-  return new Promise((resolve, reject) => {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains('templates')) db.createObjectStore('templates', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('packs')) db.createObjectStore('packs', { keyPath: 'id' });
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
     req.onerror = () => reject(req.error);
   });
+  dbPromise.catch(() => { dbPromise = null; });
+  return dbPromise;
 }
 
 async function tx(store, mode, fn) {
@@ -62,6 +70,7 @@ export const Packs = {
   /** Bilder (Date-Objekte) in ein Paket legen */
   async uploadFiles(files, packId, { shared = false } = {}) {
     const results = [];
+    const failed = [];
     let pack = null;
     if (packId) {
       const packs = await this.allPacks();
@@ -82,10 +91,12 @@ export const Packs = {
         await this.updatePack(pack);
       }
       if (shared) {
-        try { await ServerAPI.upload({ id, name: meta.name, blob: file, mime: meta.mime, shared: !!shared }); } catch (e) { console.warn('Server-Upload fehlgeschlagen', e); }
+        try { await ServerAPI.upload({ id, name: meta.name, blob: file, mime: meta.mime, shared: !!shared }); }
+        catch (e) { console.warn('Server-Upload fehlgeschlagen', e); failed.push(meta.name); }
       }
       results.push(meta);
     }
+    results.failed = failed;
     return results;
   },
 

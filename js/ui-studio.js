@@ -453,7 +453,7 @@ export function openStudio(params = {}) {
   function cleanup() {
     abort.abort();
     revokeThumbs();
-    mc.dispose();
+    mc.destroy();
     if (currentStudioCleanup === cleanup) currentStudioCleanup = null;
   }
   currentStudioCleanup = cleanup;

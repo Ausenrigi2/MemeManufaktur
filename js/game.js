@@ -284,7 +284,7 @@ export async function openLobby(container) {
 function enterLobby({ code, host, name, statusEl, lobby, pub }) {
   return new Promise((resolve) => {
     const app = document.getElementById('app');
-    const room = new Room(code, name, { lobby, pub });
+    const room = new Room(code, name, { lobby, pub, create: !!host });
     const players = new Map(); // selfId -> name
     let myId = room.selfId;
     let hostId = host ? myId : null;
@@ -465,14 +465,24 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
         case 'roster':
           players.clear();
           for (const p of msg.players) players.set(p.selfId, p.name);
-          if (msg.players.length) hostId = msg.players[0].selfId;
+          hostId = msg.hostId || (msg.players[0]?.selfId ?? null);
           renderLobby();
           break;
         case 'joined':
-          if (!players.has(msg.selfId)) { hostId = hostId || msg.selfId; }
+          if (!players.has(msg.selfId)) { hostId = msg.hostId || hostId || msg.selfId; }
           players.set(msg.selfId, msg.name);
           renderLobby();
           break;
+        case 'rejected': {
+          const key = msg.reason === 'notfound' ? 'lobby.notfound'
+            : msg.reason === 'taken' ? 'lobby.taken'
+              : msg.reason === 'full' ? 'lobby.full'
+                : msg.reason === 'started' ? 'lobby.started'
+                  : 'lobby.conflict';
+          toast('⚠️ ' + t(key));
+          leave();
+          break;
+        }
         case 'left':
           players.delete(msg.selfId);
           if (hostId === myId && startedFlag) {
@@ -481,9 +491,9 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
           }
           if (hostId === msg.selfId) {
             if (!startedFlag) {
-              // Noch in der Lobby: nächste:r Spieler:in wird Host
+              // Noch in der Lobby: nächste:r Spieler:in wird Host (Server-ID bevorzugen)
               const next = [...players.keys()][0];
-              hostId = next ?? null;
+              hostId = msg.hostId || next || null;
               renderLobby();
             } else if (!leftGame) {
               gameArea.innerHTML = '';
@@ -620,9 +630,9 @@ function doTurn(msg) {
       clearInterval(iv);
       let preview = null;
       try { preview = canvas.toDataURL('image/png'); } catch { /* Canvas gesperrt – ohne Vorschau weitermachen */ }
-      mc.dispose();
       const room = lanState.room;
       const layers = mc.layers.map((l) => ({ text: String(l.text).slice(0, 200), xF: +(l.x / mc.cw).toFixed(3), yF: +(l.y / mc.ch).toFixed(3), fsF: +(l.fontSize / base).toFixed(3) }));
+      mc.destroy();
       lanState.rerollApply = null;
       room?.send({ type: 'submit', selfId: room.selfId, layers });
       showSubmitted(preview);

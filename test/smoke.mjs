@@ -124,11 +124,29 @@ test('Ungültige IDs und Körper werden abgelehnt', async () => {
 
 test('DELETE entfernt Upload aus Bibliothek und Disk', async () => {
   const id = 'smoke_del_' + Math.random().toString(36).slice(2, 8);
-  await post({ id, data: PNG1 });
-  assert.equal((await fetch(base + `/api/library/${id}`, { method: 'DELETE' })).status, 200);
+  const up = await post({ id, data: PNG1 });
+  const anon = (up.headers.get('set-cookie') || '').match(/mm_anon=([0-9a-f]{32})/)?.[1];
+  assert.ok(anon, 'anonymes Upload-Cookie fehlt');
+  assert.equal((await fetch(base + `/api/library/${id}`, { method: 'DELETE', headers: { cookie: `mm_anon=${anon}` } })).status, 200);
   const lib = await (await fetch(base + '/api/library')).json();
   assert.ok(!lib.some((x) => x.id === id));
   assert.equal((await fetch(base + `/uploads/${id}`)).status, 404);
+});
+
+test('anonyme Uploads gehören nur dem Browser-Cookie', async () => {
+  const id = 'smoke_anonown_' + Math.random().toString(36).slice(2, 8);
+  const up = await post({ id, data: PNG1 });
+  const anon = (up.headers.get('set-cookie') || '').match(/mm_anon=([0-9a-f]{32})/)?.[1];
+  assert.ok(anon, 'anonymes Upload-Cookie fehlt');
+
+  const own = await (await fetch(base + '/api/library', { headers: { cookie: `mm_anon=${anon}` } })).json();
+  assert.equal(own.find((x) => x.id === id)?.own, true);
+  const foreign = await (await fetch(base + '/api/library')).json();
+  assert.equal(foreign.find((x) => x.id === id)?.own, false);
+
+  assert.equal((await fetch(base + `/api/library/${id}`, { method: 'DELETE' })).status, 403);
+  assert.equal((await fetch(base + `/api/library/${id}`, { method: 'DELETE', headers: { cookie: 'mm_anon=' + 'f'.repeat(32) } })).status, 403);
+  assert.equal((await fetch(base + `/api/library/${id}`, { method: 'DELETE', headers: { cookie: `mm_anon=${anon}` } })).status, 200);
 });
 
 // ---------- Accounts + Voting ----------
@@ -231,13 +249,14 @@ test('Lobbys: nur öffentliche werden gelistet, leere fallen raus', async () => 
     req.on('upgrade', (res) => resolve(res)); // Node feuert bei 101 'upgrade', nicht 'response'
     req.on('error', () => resolve(null));
   });
-  const pub = await openWs('room=LPUB&lobby=Testlobby&pub=1&name=Host');
-  const priv = await openWs('room=LPRIV&name=Gast');
+  const pub = await openWs('room=LPUB&lobby=Testlobby&pub=1&name=Host&create=1');
+  const priv = await openWs('room=LPRIV&name=Gast&create=1');
   assert.equal(pub.statusCode, 101);
   assert.equal(priv.statusCode, 101);
   const list = await (await fetch(base + '/api/lobbies')).json();
   const entry = list.find((l) => l.code === 'LPUB');
   assert.ok(entry && entry.name === 'Testlobby' && entry.players === 1, 'öffentliche Lobby fehlt');
+  assert.equal(entry.max, 12);
   assert.ok(!list.some((l) => l.code === 'LPRIV'), 'private Lobby darf nicht gelistet sein');
   pub.socket.destroy();
   priv.socket.destroy();
