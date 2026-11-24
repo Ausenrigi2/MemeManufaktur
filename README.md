@@ -142,6 +142,8 @@ to upload templates first.
 Large images are downscaled to max. 1600 px and re-encoded in the browser
 before upload (GIFs keep their animation). Static files are served with
 Brotli/Gzip, immutable caching for shared uploads and lazy/async image decoding.
+Multi-select uploads are checked against the remaining account quota first and
+continue past individual bad files instead of aborting the whole batch.
 
 ## Backups (Docker)
 

@@ -214,8 +214,13 @@ export const ServerAPI = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: meta.id, name: meta.name, mime: meta.mime, shared: !!meta.shared, data }),
     });
-    if (!r.ok) throw new Error(`upload ${r.status}`);
-    return r.json();
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const err = new Error(d.error || `upload ${r.status}`);
+      err.status = r.status;
+      throw err;
+    }
+    return d;
   },
   async remove(id) {
     const r = await fetch(`/api/library/${encodeURIComponent(id)}`, { method: 'DELETE' });

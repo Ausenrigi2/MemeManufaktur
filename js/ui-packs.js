@@ -85,6 +85,8 @@ function confirmModal(message, okLabel = t('ui.delete')) {
   });
 }
 
+const mbText = (n) => (n / 1048576).toFixed(n < 10485760 ? 1 : 0);
+
 export function openPacks() {
   revokeThumbs();
   const app = document.getElementById('app');
@@ -145,18 +147,49 @@ export function openPacks() {
     const files = [...fileList].filter((f) => !f.type || f.type.startsWith('image/'));
     if (!files.length) { toast('⚠️ ' + t('pakete.uploadNoImages')); return; }
     setServerBusy(true);
+    serverInput.value = '';
     toast(t('pakete.serverUploading', { n: files.length }), 60000);
     let ok = 0;
+    let failed = 0;
     try {
-      for (const raw of files) {
-        const file = await optimizeImage(raw);
+      // Erst alle optimieren, damit die Quota-Prüfung die echten Bytes sieht.
+      const prepared = [];
+      for (const raw of files) prepared.push(await optimizeImage(raw));
+
+      let info = meInfo;
+      if (ServerAPI.user) {
+        try { info = await ServerAPI.me(); } catch { /* Session evtl. abgelaufen */ }
+      }
+      if (info?.quota) {
+        const need = prepared.reduce((sum, f) => sum + f.size, 0);
+        const free = Math.max(0, info.quota - info.used);
+        if (need > free) {
+          toast('⚠️ ' + t('pakete.serverUploadQuota', { need: mbText(need), free: mbText(free) }), 10000);
+          return;
+        }
+      }
+
+      // Einzelne Fehler (zu groß, kaputt, fremder Typ) stoppen den Rest nicht.
+      for (let i = 0; i < prepared.length; i++) {
+        const file = prepared[i];
         const id = uid('tpl');
         const name = file.name.replace(/\.[^.]+$/, '') || t('pakete.serverUpload');
-        await ServerAPI.upload({ id, name, blob: file, mime: file.type || 'image/png', shared: true });
-        ok++;
+        try {
+          await ServerAPI.upload({ id, name, blob: file, mime: file.type || 'image/png', shared: true });
+          ok++;
+        } catch (e) {
+          console.error(e);
+          failed++;
+          // Quota voll: der Rest passt garantiert auch nicht mehr.
+          if (e.status === 413 && /quota/i.test(e.message)) {
+            failed += prepared.length - i - 1;
+            break;
+          }
+        }
       }
-      toast(t('pakete.serverUploaded', { n: ok }));
-      await refresh();
+      if (ok) await refresh();
+      if (failed) toast('⚠️ ' + t('pakete.serverUploadPartial', { ok, n: files.length, failed }), 10000);
+      else toast(t('pakete.serverUploaded', { n: ok }));
     } catch (e) {
       console.error(e);
       toast('⚠️ ' + t('pakete.serverUploadFailed'));
