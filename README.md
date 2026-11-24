@@ -116,6 +116,68 @@ and the game. The older “Also save to server” checkbox is still available wh
 uploading a local pack. If the server library is empty, the game asks the host
 to upload templates first.
 
+## Backups (Docker)
+
+`scripts/backup.sh` packs the data volume (`uploads/`, `library.json`,
+`users.json`) into `/var/backups/mememanufaktur/mememanufaktur-YYYY-MM-DD.tgz`
+and keeps the newest **7** daily archives. It runs on the Docker host, without
+stopping the app:
+
+```bash
+bash scripts/backup.sh
+```
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MEME_BACKUP_DIR` | `/var/backups/mememanufaktur` | Directory for the archives |
+| `MEME_BACKUP_KEEP` | `7` | Number of daily archives kept |
+| `MEME_CONTAINER` | `mememanufaktur` | Compose container name |
+
+Daily at 00:00 via systemd timer:
+
+```ini
+# /etc/systemd/system/mememanufaktur-backup.service
+[Unit]
+Description=MemeManufaktur data backup
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/mememanufaktur/scripts/backup.sh
+```
+
+```ini
+# /etc/systemd/system/mememanufaktur-backup.timer
+[Unit]
+Description=Daily MemeManufaktur backup
+
+[Timer]
+OnCalendar=*-*-* 00:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+systemctl daemon-reload
+systemctl enable --now mememanufaktur-backup.timer
+systemctl start mememanufaktur-backup.service   # test run
+```
+
+Restore (extract back into the volume while the app is stopped):
+
+```bash
+docker compose stop
+docker run --rm --volumes-from mememanufaktur \
+  -v /var/backups/mememanufaktur:/backup alpine \
+  sh -c 'rm -rf /app/data/* && tar xzf /backup/mememanufaktur-YYYY-MM-DD.tgz -C /app/data && chown -R 1000:1000 /app/data'
+docker compose start
+```
+
+Archives stay on the same disk; copy them off the LXC (Proxmox backup or
+rsync) if the host itself can fail.
+
 ## HTTP API & WebSocket
 
 | Endpoint | Method | Purpose |
@@ -186,6 +248,7 @@ js/scoring.js          Pure scoring functions
 js/zip.js              Dependency-free ZIP writer for the finale
 js/main.js             Router, nav/footer, help
 server.js              Zero-dep Node server (static, uploads, WS relay)
+scripts/backup.sh      Daily Docker data backup (7-day retention)
 assets/icon-*.png      App icons (PWA / home screen)
 assets/screenshot.png  Home page screenshot (used in this README)
 assets/fonts/          Bundled Bangers/Nunito fonts (OFL)
