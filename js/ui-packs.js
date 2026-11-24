@@ -1,6 +1,6 @@
 // ============ Pakete-Seite ============
 import { el, t, toast, uid } from './lib.js';
-import { Packs, ServerAPI } from './packs.js';
+import { Packs, ServerAPI, optimizeImage } from './packs.js';
 
 // Eigene Styles, ohne styles.css anzufassen (index.html bleibt unverändert).
 if (!document.querySelector('link[href="css/packs.css"]')) {
@@ -148,7 +148,8 @@ export function openPacks() {
     toast(t('pakete.serverUploading', { n: files.length }), 60000);
     let ok = 0;
     try {
-      for (const file of files) {
+      for (const raw of files) {
+        const file = await optimizeImage(raw);
         const id = uid('tpl');
         const name = file.name.replace(/\.[^.]+$/, '') || t('pakete.serverUpload');
         await ServerAPI.upload({ id, name, blob: file, mime: file.type || 'image/png', shared: true });
@@ -360,7 +361,7 @@ export function openPacks() {
       visiblePacks++;
 
       const thumbs = tpls.map((tpl) => {
-        const img = el('img', { alt: tpl.name, loading: 'lazy' });
+        const img = el('img', { alt: tpl.name, loading: 'lazy', decoding: 'async' });
         const url = URL.createObjectURL(tpl.blob);
         thumbUrls.push(url);
         img.src = url;
@@ -414,7 +415,7 @@ export function openPacks() {
   }
 
   function serverCard(item) {
-    const img = el('img', { alt: item.name, loading: 'lazy' });
+    const img = el('img', { alt: item.name, loading: 'lazy', decoding: 'async' });
     img.src = ServerAPI.url(item.id);
     const votes = Array.isArray(item.votes) ? item.votes : [];
     let voted = !!(meInfo && votes.includes(meInfo.user.id));

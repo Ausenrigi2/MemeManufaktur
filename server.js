@@ -8,6 +8,7 @@ import fssync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -44,6 +45,8 @@ const MIME = {
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
   '.gif': 'image/gif',
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
   '.json': 'application/json; charset=utf-8',
   '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.ico': 'image/x-icon',
@@ -52,6 +55,24 @@ const MIME = {
 };
 
 function mimeOf(file) { return MIME[path.extname(file).toLowerCase()] || 'application/octet-stream'; }
+
+// Komprimierte Varianten werden pro Datei einmal erzeugt und im RAM gehalten.
+// Spart auf dem ersten Load ~70-80 % Transfer für JS/CSS/HTML.
+const compressionCache = new Map();
+function compressionOf(file, body, stat) {
+  const hit = compressionCache.get(file);
+  if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return hit;
+  const next = {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    gzip: zlib.gzipSync(body, { level: 6 }),
+    br: zlib.brotliCompressSync(body, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 } }),
+  };
+  compressionCache.set(file, next);
+  return next;
+}
+const acceptsEncoding = (req, coding) => String(req.headers['accept-encoding'] || '').toLowerCase().includes(coding);
+const ETAG_OF = (stat) => `W/"${stat.size.toString(16)}-${Math.round(stat.mtimeMs).toString(16)}"`;
 
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -342,23 +363,34 @@ async function serveUpload(id, req, res) {
   const file = path.join(UPLOADS_DIR, `${entry.id}.${entry.ext}`);
   const ext = path.extname(file).toLowerCase();
   const isSvg = ext === '.svg';
+  const st = await fs.stat(file).catch(() => null);
+  if (!st) return notFound(res);
+  const etag = ETAG_OF(st);
+  // Öffentliche IDs werden nie neu belegt -> ein Jahr immutable. Private bleiben
+  // am Login hängen und werden deshalb nur kurz gecacht.
+  const cacheControl = entry.owner && !entry.shared
+    ? 'private, max-age=300'
+    : 'public, max-age=31536000, immutable';
   const headers = {
     ...SECURITY_HEADERS,
     'Content-Type': isSvg ? 'application/octet-stream' : (IMAGE_MIMES.has(entry.mime) ? entry.mime : mimeOf(file)),
-    'Cache-Control': entry.owner && !entry.shared ? 'private, no-store' : 'public, max-age=3600',
+    'Cache-Control': cacheControl,
+    'ETag': etag,
+    'Last-Modified': st.mtime.toUTCString(),
     'Content-Security-Policy': "default-src 'none'; sandbox",
   };
   if (isSvg) headers['Content-Disposition'] = `attachment; filename="${entry.id}.svg"`;
+  if (req.headers['if-none-match'] === etag) {
+    res.writeHead(304, { ...SECURITY_HEADERS, 'ETag': etag, 'Cache-Control': cacheControl });
+    return res.end();
+  }
   if (req.method === 'HEAD') {
-    const st = await fs.stat(file).catch(() => null);
-    if (!st) return notFound(res);
     res.writeHead(200, { ...headers, 'Content-Length': st.size });
     return res.end();
   }
-  const body = await fs.readFile(file).catch(() => null);
-  if (!body) return notFound(res);
-  res.writeHead(200, { ...headers, 'Content-Length': body.length });
-  res.end(body);
+  res.writeHead(200, { ...headers, 'Content-Length': st.size });
+  // Streamen statt die ganze Datei in den RAM zu laden (wichtig bei vielen Gästen).
+  fssync.createReadStream(file).on('error', () => res.destroy()).pipe(res);
 }
 
 // ---------- Statische Dateien ----------
@@ -378,23 +410,34 @@ async function serveStatic(pathname, req, res) {
   if (stat?.isDirectory()) { target = path.join(full, 'index.html'); stat = await fs.stat(target).catch(() => null); }
   if (!stat?.isFile()) return notFound(res);
 
-  const etag = `"${stat.size.toString(16)}-${Math.round(stat.mtimeMs).toString(16)}"`;
+  const etag = ETAG_OF(stat);
+  const type = mimeOf(target);
+  // index.html bleibt no-cache, damit Deployments sofort ankommen. Hashes gibt
+  // es nicht, daher Assets moderat und Fonts/Icons länger cachen.
+  const cacheControl = posixRel === 'index.html'
+    ? 'no-cache'
+    : posixRel.startsWith('assets/') ? 'public, max-age=604800' : 'public, max-age=300';
   if (req.headers['if-none-match'] === etag) {
-    res.writeHead(304, { ...SECURITY_HEADERS, 'ETag': etag, 'Cache-Control': 'no-cache' });
+    res.writeHead(304, { ...SECURITY_HEADERS, 'ETag': etag, 'Cache-Control': cacheControl, 'Vary': 'Accept-Encoding' });
     return res.end();
+  }
+
+  let body = await fs.readFile(target);
+  let encoding = null;
+  if (body.length > 1024 && /^(?:text\/|application\/(?:javascript|json|manifest\+json)|image\/svg\+xml)/.test(type)) {
+    const compressed = compressionOf(target, body, stat);
+    if (acceptsEncoding(req, 'br')) { body = compressed.br; encoding = 'br'; }
+    else if (acceptsEncoding(req, 'gzip')) { body = compressed.gzip; encoding = 'gzip'; }
   }
   const headers = {
     ...SECURITY_HEADERS,
-    'Content-Type': mimeOf(target),
-    'Cache-Control': 'no-cache',
+    'Content-Type': type,
+    'Cache-Control': cacheControl,
     'ETag': etag,
     'Last-Modified': stat.mtime.toUTCString(),
+    'Vary': 'Accept-Encoding',
   };
-  if (req.method === 'HEAD') {
-    res.writeHead(200, { ...headers, 'Content-Length': stat.size });
-    return res.end();
-  }
-  const body = await fs.readFile(target);
+  if (encoding) headers['Content-Encoding'] = encoding;
   res.writeHead(200, { ...headers, 'Content-Length': body.length });
   res.end(body);
 }

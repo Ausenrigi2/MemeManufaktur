@@ -61,7 +61,7 @@ export function openStudio(params = {}) {
       class: 'tpl-tile', type: 'button', 'data-tpl': tpl.id, 'aria-pressed': 'false',
       title: tpl.name, onclick: () => loadTemplate(tpl.id),
     },
-      url ? el('img', { src: url, alt: '', loading: 'lazy', draggable: 'false' }) : null,
+      url ? el('img', { src: url, alt: '', loading: 'lazy', decoding: 'async', draggable: 'false' }) : null,
       el('span', { class: 'tpl-name' }, tpl.name),
     );
   }
@@ -71,7 +71,7 @@ export function openStudio(params = {}) {
       class: 'tpl-tile', type: 'button', 'data-tpl': `srv:${s.id}`, 'aria-pressed': 'false',
       title: s.name, onclick: () => loadTemplate(`srv:${s.id}`),
     },
-      el('img', { src: ServerAPI.url(s.id), alt: '', loading: 'lazy', draggable: 'false' }),
+      el('img', { src: ServerAPI.url(s.id), alt: '', loading: 'lazy', decoding: 'async', draggable: 'false' }),
       el('span', { class: 'tpl-name' }, s.name),
     );
   }

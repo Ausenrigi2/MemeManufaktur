@@ -27,6 +27,12 @@ export class MemeCanvas {
     this.onChange = null;
     this._dragging = null;
     this._url = null;
+    this._gif = false;
+    this._gifEl = null;
+    this._gifWrap = null;
+    this._overlayParent = null;
+    this._overlayActive = false;
+    this._animFrame = 0;
   }
 
   get cw() { return this.canvas.width; }
@@ -42,6 +48,8 @@ export class MemeCanvas {
   }
 
   async setImage(blobOrUrl, name = '') {
+    this.stopAnimation();
+    this._deactivateGifLayer();
     const url = blobOrUrl instanceof Blob ? URL.createObjectURL(blobOrUrl) : blobOrUrl;
     const img = new Image();
     try {
@@ -56,18 +64,103 @@ export class MemeCanvas {
     if (this._url) URL.revokeObjectURL(this._url);
     this._url = blobOrUrl instanceof Blob ? url : null;
     this.image = img;
+    this._gif = blobOrUrl instanceof Blob
+      ? blobOrUrl.type === 'image/gif'
+      : /^data:image\/gif/i.test(String(blobOrUrl)) || /\.gif(?:[?#]|$)/i.test(String(blobOrUrl));
     this.natural = { w: img.naturalWidth || img.width, h: img.naturalHeight || img.height };
     this.rot = 0; this.flip = false; this.zoom = 1;
     this.filters = { brightness: 100, contrast: 100, saturate: 100 };
     this.name = name;
     this._recomputeSize();
     this.render();
+    this.startAnimation();
+  }
+
+  isAnimatedGif() { return this._gif; }
+
+  // Chrome zeichnet bei drawImage nur das erste GIF-Frame. Deshalb liegt bei
+  // animierten GIFs ein echtes <img> unter dem Canvas; der Canvas malt nur
+  // noch transparente Text-Ebenen. Das animiert nativ und kostet kein CPU-Loop.
+  startAnimation() {
+    if (!this._gif || this._animFrame || this._overlayActive) return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    if (this.canvas.isConnected) { this._activateGifLayer(); return; }
+    const waitForDom = () => {
+      this._animFrame = 0;
+      if (!this._gif || this._overlayActive) return;
+      if (this.canvas.isConnected) { this._activateGifLayer(); return; }
+      this._animFrame = requestAnimationFrame(waitForDom);
+    };
+    this._animFrame = requestAnimationFrame(waitForDom);
+  }
+
+  stopAnimation() {
+    if (this._animFrame) cancelAnimationFrame(this._animFrame);
+    this._animFrame = 0;
+  }
+
+  _activateGifLayer() {
+    if (!this._gif || this._overlayActive || !this.canvas.parentNode) return;
+    const parent = this.canvas.parentNode;
+    // Eigener Wrapper, damit Bild und Text-Canvas exakt dieselbe Box haben –
+    // auch wenn das Canvas in einem größeren Grid (.stage) zentriert ist.
+    const wrap = document.createElement('div');
+    wrap.className = 'meme-gif-overlay';
+    parent.insertBefore(wrap, this.canvas);
+    wrap.append(this.canvas);
+    if (!this._gifEl) {
+      this._gifEl = document.createElement('img');
+      this._gifEl.className = 'meme-gif-layer';
+      this._gifEl.alt = '';
+      this._gifEl.setAttribute('aria-hidden', 'true');
+      this._gifEl.draggable = false;
+    }
+    this._gifEl.src = this.image?.src || '';
+    wrap.insertBefore(this._gifEl, this.canvas);
+    this._overlayParent = wrap;
+    this._gifWrap = wrap;
+    this.canvas.style.background = 'transparent';
+    this._overlayActive = true;
+    this._syncGifLayer();
+    this.render();
+  }
+
+  _syncGifLayer() {
+    const el = this._gifEl;
+    if (!this._overlayActive || !el) return;
+    // Bei 90°/270° füllt das ungedrehte Bild den gedrehten Canvas nur, wenn
+    // Breite und Höhe relativ zum Container getauscht werden.
+    if (this.rot % 2 === 0) {
+      el.style.width = '100%';
+      el.style.height = '100%';
+    } else {
+      el.style.width = `${(this.ch / this.cw) * 100}%`;
+      el.style.height = `${(this.cw / this.ch) * 100}%`;
+    }
+    const f = this.filters;
+    el.style.transform = `translate(-50%, -50%) rotate(${this.rot * 90}deg) scale(${this.zoom * (this.flip ? -1 : 1)}, ${this.zoom})`;
+    el.style.filter = `brightness(${f.brightness}%) contrast(${f.contrast}%) saturate(${f.saturate}%)`;
+  }
+
+  _deactivateGifLayer() {
+    if (this._gifEl) { this._gifEl.remove(); this._gifEl = null; }
+    if (this._gifWrap?.parentNode) {
+      this._gifWrap.parentNode.insertBefore(this.canvas, this._gifWrap);
+      this._gifWrap.remove();
+    }
+    this._gifWrap = null;
+    this._overlayParent = null;
+    this.canvas.style.background = '';
+    this._overlayActive = false;
   }
 
   destroy() {
+    this.stopAnimation();
+    this._deactivateGifLayer();
     if (this._url) URL.revokeObjectURL(this._url);
     this._url = null;
     this.image = null;
+    this._gif = false;
     this.layers = [];
     this.selectedId = null;
     this.onChange = null;
@@ -215,29 +308,49 @@ export class MemeCanvas {
     l._box = { minX, maxX, minY: topY, maxY: topY + totalH };
   }
 
+  _drawImage(ctx) {
+    if (!this.image) return;
+    const { w: nw, h: nh } = this.natural;
+    const k = this.cw / (this.rot % 2 === 1 ? nh : nw); // Skalierung zur nativen Auflösung
+    ctx.save();
+    ctx.translate(this.cw / 2, this.ch / 2);
+    ctx.rotate((this.rot * Math.PI) / 2);
+    ctx.scale(this.zoom * (this.flip ? -1 : 1), this.zoom);
+    const f = this.filters;
+    ctx.filter = `brightness(${f.brightness}%) contrast(${f.contrast}%) saturate(${f.saturate}%)`;
+    ctx.drawImage(this.image, (-nw / 2) * k, (-nh / 2) * k, nw * k, nh * k);
+    ctx.restore();
+    ctx.filter = 'none';
+  }
+
   render() {
+    if (this._gif && !this._overlayActive && this.canvas.isConnected) this._activateGifLayer();
     const { ctx, canvas } = this;
+    const overlay = this._overlayActive && this._gif;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    if (this.image) {
-      const { w: nw, h: nh } = this.natural;
-      const k = this.cw / (this.rot % 2 === 1 ? nh : nw); // Skalierung zur nativen Auflösung
-      ctx.save();
-      ctx.translate(this.cw / 2, this.ch / 2);
-      ctx.rotate((this.rot * Math.PI) / 2);
-      ctx.scale(this.zoom * (this.flip ? -1 : 1), this.zoom);
-      const f = this.filters;
-      ctx.filter = `brightness(${f.brightness}%) contrast(${f.contrast}%) saturate(${f.saturate}%)`;
-      ctx.drawImage(this.image, (-nw / 2) * k, (-nh / 2) * k, nw * k, nh * k);
-      ctx.restore();
-      ctx.filter = 'none';
+    if (!overlay) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      this._drawImage(ctx);
+    } else {
+      this._syncGifLayer();
     }
     for (const l of this.layers) this._drawLayer(ctx, l);
   }
 
   toBlob(type = 'image/png', quality = 0.92) {
-    return new Promise((res) => this.canvas.toBlob(res, type, quality));
+    // Export bleibt ein statisches Bild – GIFs werden im aktuellen Frame
+    // eingebrannt, inklusive weißem Hintergrund und Text.
+    if (!this._overlayActive) return new Promise((res) => this.canvas.toBlob(res, type, quality));
+    const out = document.createElement('canvas');
+    out.width = this.canvas.width;
+    out.height = this.canvas.height;
+    const ctx = out.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, out.width, out.height);
+    this._drawImage(ctx);
+    ctx.drawImage(this.canvas, 0, 0);
+    return new Promise((res) => out.toBlob(res, type, quality));
   }
 
   // ---------- Pointer-Interaktion ----------
@@ -301,34 +414,46 @@ export class MemeCanvas {
   }
 }
 
-// Render-Helper für Spiel-Vorschauen (deterministisch auf allen Clients)
-export async function renderMemeToDataUrl({ blob, top = '', bottom = '', id = '', layers = null }, width = 480) {
+// Text-Ebenen auf ein MemeCanvas malen – von Vorschau, Voting und Review genutzt.
+function applyMeme(mc, { top = '', bottom = '', id = '', layers = null }) {
+  const base = Math.min(mc.cw, mc.ch);
+  const fs = Math.round(base * 0.11);
+  const z = zoneFor(id);
+  const norm = normLayers(layers);
+  if (norm.length) {
+    for (const l of norm) {
+      const lfs = Math.round(base * l.fsF);
+      mc.addLayer({ text: l.text, x: Math.round(mc.cw * l.xF), y: Math.round(mc.ch * l.yF), fontSize: lfs, strokeWidth: Math.max(4, Math.round(lfs / 9)) });
+    }
+    mc.selectedId = null;
+  } else {
+    const topText = String(top).trim();
+    const botText = String(bottom).trim();
+    if (topText) {
+      mc.addLayer({ text: topText, ...(layerPatch(mc, z?.top) || { y: Math.round(base * 0.15), fontSize: fs, strokeWidth: Math.max(4, Math.round(fs / 9)) }) });
+      mc.selectedId = null;
+    }
+    if (botText) {
+      mc.addLayer({ text: botText, ...(layerPatch(mc, z?.bottom) || { y: mc.ch - Math.round(base * 0.15), fontSize: fs, strokeWidth: Math.max(4, Math.round(fs / 9)) }) });
+    }
+  }
+  mc.render();
+}
+
+// Live-Canvas für animierte GIFs (Voting). Der Aufrufer hängt das Canvas ein
+// und ruft mc.startAnimation(), sobald es im DOM ist.
+export async function renderMemeToCanvas(opts) {
   const canvas = document.createElement('canvas');
   const mc = new MemeCanvas(canvas);
+  await mc.setImage(opts.blob);
+  applyMeme(mc, opts);
+  return { canvas, mc };
+}
+
+// Statisches JPEG für Downloads, ZIP und Review-Kacheln (deterministisch).
+export async function renderMemeToDataUrl(opts, width = 480) {
+  const { canvas, mc } = await renderMemeToCanvas(opts);
   try {
-    await mc.setImage(blob);
-    const base = Math.min(mc.cw, mc.ch);
-    const fs = Math.round(base * 0.11);
-    const z = zoneFor(id);
-    const norm = normLayers(layers);
-    if (norm.length) {
-      for (const l of norm) {
-        const lfs = Math.round(base * l.fsF);
-        mc.addLayer({ text: l.text, x: Math.round(mc.cw * l.xF), y: Math.round(mc.ch * l.yF), fontSize: lfs, strokeWidth: Math.max(4, Math.round(lfs / 9)) });
-      }
-      mc.selectedId = null;
-    } else {
-      const topText = String(top).trim();
-      const botText = String(bottom).trim();
-      if (topText) {
-        mc.addLayer({ text: topText, ...(layerPatch(mc, z?.top) || { y: Math.round(base * 0.15), fontSize: fs, strokeWidth: Math.max(4, Math.round(fs / 9)) }) });
-        mc.selectedId = null;
-      }
-      if (botText) {
-        mc.addLayer({ text: botText, ...(layerPatch(mc, z?.bottom) || { y: mc.ch - Math.round(base * 0.15), fontSize: fs, strokeWidth: Math.max(4, Math.round(fs / 9)) }) });
-      }
-    }
-    mc.render();
     const out = document.createElement('canvas');
     const k = width && canvas.width > width ? width / canvas.width : 1;
     out.width = Math.max(1, Math.round(canvas.width * k));

@@ -4,9 +4,8 @@ services:
     container_name: mememanufaktur
     ports:
       - "${MEME_PORT:-8080}:8080"
+    # Daten liegen bewusst außerhalb des Repos/Compose-Ordners und überleben
+    # git pull, Rebuilds und docker compose down -v.
     volumes:
-      - meme-data:/app/data
+      - "${MEME_DATA_PATH:-/srv/mememanufaktur/data}:/app/data"
     restart: unless-stopped
-
-volumes:
-  meme-data:

@@ -409,8 +409,12 @@ select { cursor: pointer; }
   text-shadow: 0 6px 0 rgba(40, 20, 90, 0.4);
 }
 .turn-box { text-align: left; }
-.meme-preview { border: var(--border); border-radius: var(--radius); overflow: hidden; background: #fff; box-shadow: var(--shadow); margin-bottom: 16px; }
+.meme-preview { position: relative; border: var(--border); border-radius: var(--radius); overflow: hidden; background: #fff; box-shadow: var(--shadow); margin-bottom: 16px; }
 .meme-preview canvas, .meme-preview img { width: 100%; height: auto; display: block; }
+/* Animiertes GIF als echte Bild-Ebene unter dem transparenten Text-Canvas. */
+.meme-gif-overlay { position: relative; display: inline-block; width: fit-content; max-width: 100%; overflow: hidden; background: #fff; }
+.meme-gif-overlay > canvas { position: relative; z-index: 1; width: auto; max-width: 100%; height: auto; display: block; margin: 0; }
+.meme-gif-layer { position: absolute; left: 50%; top: 50%; transform-origin: center; object-fit: fill; pointer-events: none; user-select: none; }
 .timerbar { height: 18px; border: var(--border); border-radius: 999px; background: #fff; overflow: hidden; margin: 12px 0 18px; }
 .timerbar i { display: block; height: 100%; background: var(--green); transition: width 0.2s linear, background 0.3s; }
 .timerbar.warn i { background: var(--red); }

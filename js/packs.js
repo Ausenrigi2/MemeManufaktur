@@ -4,6 +4,34 @@ import { uid, toast } from './lib.js';
 const DB_NAME = 'mememanufaktur';
 const DB_VERSION = 1;
 
+const MAX_IMAGE_SIDE = 1600;
+const OPTIMIZE_MIN_BYTES = 128 * 1024;
+
+// Große Bilder vor dem Speichern/Upload verkleinern. GIFs und SVGs bleiben
+// unangetastet: Animation bzw. bewusste Server-Ablehnung nicht zerstören.
+export async function optimizeImage(file) {
+  if (!file || !file.type?.startsWith('image/') || file.type === 'image/gif' || file.type === 'image/svg+xml') return file;
+  if (file.size <= OPTIMIZE_MIN_BYTES) return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_IMAGE_SIDE / Math.max(bitmap.width, bitmap.height));
+    if (scale >= 1) { bitmap.close?.(); return file; }
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close?.();
+    // PNG (evtl. Transparenz) -> WebP, Fotos -> JPEG. Browser-Fallback wird respektiert.
+    const target = file.type === 'image/png' ? 'image/webp' : 'image/jpeg';
+    const blob = await new Promise((res) => canvas.toBlob(res, target, 0.9));
+    if (!blob || blob.size >= file.size) return file;
+    const ext = blob.type === 'image/webp' ? '.webp' : blob.type === 'image/png' ? '.png' : '.jpg';
+    return new File([blob], file.name.replace(/\.[^.]+$/, '') + ext, { type: blob.type, lastModified: file.lastModified });
+  } catch {
+    return file;
+  }
+}
+
 let dbPromise = null;
 function openDB() {
   if (dbPromise) return dbPromise;
@@ -76,7 +104,8 @@ export const Packs = {
       const packs = await this.allPacks();
       pack = packs.find((p) => p.id === packId) || null;
     }
-    for (const file of files) {
+    for (const raw of files) {
+      const file = await optimizeImage(raw);
       const id = uid('tpl');
       const meta = {
         id, name: file.name.replace(/\.[^.]+$/, ''), blob: file,

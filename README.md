@@ -4,7 +4,8 @@ A self-hostable **meme party game** — your instance, your design, your data:
 
 - 🖌️ **Meme Studio** — visual template gallery, drag & scale text, outline,
   highlight, image filters, keyboard shortcuts, PNG/JPEG export and clipboard
-  copy. Everything renders locally in your browser.
+  copy. Everything renders locally in your browser. Animated GIFs stay animated
+  in editor and voting previews; exports are flattened stills.
 - ☁️ **Server template library** — no bundled meme images. Upload your own
   pictures directly to the server; they immediately show up in the studio and
   in every game on the network. Uploads can be managed or deleted with an
@@ -53,18 +54,40 @@ npm start
 ### 2) Docker
 
 ```bash
+# Data lives outside the checkout by default; create it once for UID 1000.
+mkdir -p /srv/mememanufaktur/data
+chown -R 1000:1000 /srv/mememanufaktur/data
+
 docker compose up -d --build
 # → http://localhost:8080
 
-# other host port:
-MEME_PORT=8090 docker compose up -d --build
+# other host port / data path:
+MEME_PORT=8090 MEME_DATA_PATH=/mnt/memes docker compose up -d --build
 # → http://localhost:8090
 ```
 
-The compose file is included (`docker-compose.yml`). Uploads persist in the
-named volume `meme-data` (mounted at `/app/data`). The image runs as the
-non-root `node` user and ships a `/health` check; a `.dockerignore` keeps
-uploads, git history and tests out of the build context.
+The compose file is included (`docker-compose.yml`). Uploads, accounts and the
+library live in `MEME_DATA_PATH` (default `/srv/mememanufaktur/data`, mounted
+at `/app/data`), so `git pull`, rebuilds and `docker compose down` never touch
+them. The container starts briefly as root to fix bind-mount ownership, then
+drops to the non-root `node` user; it ships a `/health` check. A `.dockerignore`
+keeps uploads, git history and tests out of the build context.
+
+Upgrading from the old named volume `meme-data` (do this **before** the first
+start with the new compose file, or stop the new container again first):
+
+```bash
+docker compose down
+OLD_VOL=$(docker volume ls -q --filter name=meme-data | head -n1)
+[ -n "$OLD_VOL" ] || { echo "meme-data volume not found"; exit 1; }
+mkdir -p /srv/mememanufaktur/data
+docker run --rm -v "$OLD_VOL":/from -v /srv/mememanufaktur/data:/to \
+  alpine sh -c 'cp -a /from/. /to/'
+chown -R 1000:1000 /srv/mememanufaktur/data
+docker compose up -d --build
+# optional cleanup after checking the data:
+# docker volume rm "$OLD_VOL"
+```
 
 ### 3) Static only (offline)
 
@@ -107,7 +130,7 @@ logic runs client-side.
 | Mode | Storage |
 | --- | --- |
 | Local (browser) | IndexedDB — only you can see them |
-| Server (direct upload) | `./data/uploads/` + index `./data/library.json`; used by the studio and every game |
+| Server (direct upload) | `MEME_DATA_DIR/uploads/` + index `MEME_DATA_DIR/library.json` (`./data` natively, `/srv/mememanufaktur/data` in Docker); used by the studio and every game |
 | With an account | Server storage per account (up to 250 MB); private entries stay out of the public library and away from anonymous visitors, but signed-in players on the same server can load them by ID for LAN games. Accounts need the Node server |
 
 The Packs page has a **“Upload directly to the server”** dropzone. Those
@@ -116,9 +139,13 @@ and the game. The older “Also save to server” checkbox is still available wh
 uploading a local pack. If the server library is empty, the game asks the host
 to upload templates first.
 
+Large images are downscaled to max. 1600 px and re-encoded in the browser
+before upload (GIFs keep their animation). Static files are served with
+Brotli/Gzip, immutable caching for shared uploads and lazy/async image decoding.
+
 ## Backups (Docker)
 
-`scripts/backup.sh` packs the data volume (`uploads/`, `library.json`,
+`scripts/backup.sh` packs the data directory (`uploads/`, `library.json`,
 `users.json`) into `/var/backups/mememanufaktur/mememanufaktur-YYYY-MM-DD.tgz`
 and keeps the newest **7** daily archives. It runs on the Docker host, without
 stopping the app:
@@ -227,6 +254,9 @@ This is a LAN-first, self-hosted app. A few deliberate guardrails:
 | `MEME_USER_QUOTA_BYTES` | `262144000` | Storage quota per account (250 MB) |
 | `MEME_ANON_QUOTA_BYTES` | `524288000` | Storage quota for the shared anonymous library (500 MB) |
 
+Compose-only: `MEME_DATA_PATH` (host data directory, default
+`/srv/mememanufaktur/data`) and `MEME_PORT` (published port, default `8080`).
+
 ## Project structure
 
 ```
@@ -248,6 +278,7 @@ js/scoring.js          Pure scoring functions
 js/zip.js              Dependency-free ZIP writer for the finale
 js/main.js             Router, nav/footer, help
 server.js              Zero-dep Node server (static, uploads, WS relay)
+docker-entrypoint.sh   Fixes data-mount ownership, then drops to node
 scripts/backup.sh      Daily Docker data backup (7-day retention)
 assets/icon-*.png      App icons (PWA / home screen)
 assets/screenshot.png  Home page screenshot (used in this README)

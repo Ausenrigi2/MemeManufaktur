@@ -1,6 +1,6 @@
 // ============ Meme-Partie: Lobby + Spiel-Phasen ============
 import { el, t, LS, rand, shuffle, toast, confetti, roomCode, uid } from './lib.js';
-import { MemeCanvas, renderMemeToDataUrl } from './editor.js';
+import { MemeCanvas, renderMemeToDataUrl, renderMemeToCanvas } from './editor.js';
 import { zoneFor, layerPatch, normLayers } from './textzones.js';
 import { Packs, ServerAPI } from './packs.js';
 import { Room } from './net.js';
@@ -109,6 +109,27 @@ export async function resolveTpl(key) {
   }
   const tpl = await Packs.getTemplate(key);
   return tpl ? { blob: tpl.blob, name: tpl.name } : null;
+}
+
+const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
+  const fr = new FileReader();
+  fr.onload = () => resolve(fr.result);
+  fr.onerror = reject;
+  fr.readAsDataURL(blob);
+});
+
+// Server-Templates laden Gäste direkt (GIFs bleiben animiert und HTTP-gecacht).
+// Lokale Templates müssen durch den WebSocket; kleine GIFs bleiben dabei GIF,
+// alles andere (und zu große GIFs) geht als kompaktes JPEG raus.
+const GIF_WS_LIMIT = 3 * 1024 * 1024;
+async function guestTemplatePayload(tpl, gifBudget = GIF_WS_LIMIT) {
+  if (tpl.blob?.type === 'image/gif' && tpl.blob.size <= Math.min(GIF_WS_LIMIT, gifBudget)) {
+    return { data: await blobToDataUrl(tpl.blob), gifBytes: tpl.blob.size };
+  }
+  return {
+    data: await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id || '', top: '', bottom: '' }, 900),
+    gifBytes: 0,
+  };
 }
 
 async function templateKeyPool() {
@@ -681,11 +702,13 @@ function doTurn(msg) {
     lanState.rerollApply = async (m) => {
       if (settled || !canvas.isConnected || m.playerId !== msg.playerId) return;
       try {
-        const res = await fetch(m.tpl);
-        if (!res.ok) throw new Error('Template');
-        await mc.setImage(await res.blob(), m.name || m.tplKey);
-        window.__lanTpls = window.__lanTpls || {};
-        window.__lanTpls[m.tplKey] = m.tpl;
+        if (m.tpl) {
+          window.__lanTpls = window.__lanTpls || {};
+          window.__lanTpls[m.tplKey] = m.tpl;
+        }
+        const tpl = await resolveTpl(m.tplKey);
+        if (!tpl) throw new Error('Template');
+        await mc.setImage(tpl.blob, m.name || m.tplKey);
       } catch (e) {
         console.error(e);
         toast('⚠️ ' + t('spiel.turn.error'));
@@ -790,7 +813,12 @@ function doVote(msg) {
   const cache = {};
   let peak = null, sent = false, ended = false, idx = 0, showSeq = 0, clock = null;
 
-  const img = el('img', { class: 'vote-img', alt: '' });
+  const mediaFrame = el('div', { class: 'vote-media-frame' });
+  let liveView = null;
+  function clearLiveView() {
+    if (liveView) { liveView.destroy(); liveView = null; }
+    mediaFrame.replaceChildren();
+  }
   const meta = el('div', { class: 'vote-meta' });
   const upB = el('button', { class: 'vbtn vbtn-up', type: 'button', title: t('spiel.vote.up'), 'aria-label': t('spiel.vote.up'), 'aria-pressed': 'false' }, t('spiel.vote.upBtn'));
   const dnB = el('button', { class: 'vbtn vbtn-down', type: 'button', title: t('spiel.vote.down'), 'aria-label': t('spiel.vote.down'), 'aria-pressed': 'false' }, t('spiel.vote.downBtn'));
@@ -846,18 +874,26 @@ function doVote(msg) {
     const m = list[idx];
     meta.textContent = m.name;
     paint();
-    if (!cache[m.playerId]) {
-      const tpl = await resolveTpl(m.tplKey);
-      if (!tpl) {
-        if (seq !== showSeq) return;
-        img.removeAttribute('src');
-        paint();
-        return;
-      }
-      cache[m.playerId] = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom, layers: m.layers });
-    }
+    clearLiveView();
+    const tpl = await resolveTpl(m.tplKey);
     if (seq !== showSeq) return;
-    img.src = cache[m.playerId];
+    if (!tpl) { paint(); return; }
+    if (tpl.blob.type === 'image/gif') {
+      // GIF-Templates live animieren, statt sie zu einem JPEG einzufrieren.
+      const view = await renderMemeToCanvas({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom, layers: m.layers });
+      if (seq !== showSeq) { view.mc.destroy(); return; }
+      view.canvas.className = 'vote-img';
+      view.canvas.setAttribute('aria-label', m.name);
+      mediaFrame.append(view.canvas);
+      view.mc.startAnimation();
+      liveView = view.mc;
+    } else {
+      if (!cache[m.playerId]) {
+        cache[m.playerId] = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom, layers: m.layers });
+      }
+      if (seq !== showSeq) return;
+      mediaFrame.append(el('img', { class: 'vote-img', alt: '', decoding: 'async', src: cache[m.playerId] }));
+    }
     paint();
   }
 
@@ -888,7 +924,7 @@ function doVote(msg) {
 
   // Eine gemeinsame Uhr: alle Geräte zeigen denselben Index, auch wenn das eigene Meme dran ist.
   clock = setInterval(() => {
-    if (!img.isConnected) { clearInterval(clock); return; }
+    if (!mediaFrame.isConnected) { clearInterval(clock); clearLiveView(); return; }
     const elapsed = Date.now() - startedAt;
     const total = list.length * perMeme * 1000;
     if (elapsed >= total) {
@@ -916,7 +952,7 @@ function doVote(msg) {
       ownNote,
       el('div', { class: 'vote-main' },
         el('div', { class: 'vote-media' },
-          img,
+          mediaFrame,
           meta,
           dots,
         ),
@@ -954,7 +990,7 @@ function voteSummary(m) {
 function buildMemeReview(memes) {
   const grid = el('div', { class: 'review-grid' });
   const items = memes.map((m, i) => {
-    const img = el('img', { class: 'review-img', alt: '', loading: 'lazy' });
+    const img = el('img', { class: 'review-img', alt: '', loading: 'lazy', decoding: 'async' });
     const dl = el('a', {
       class: 'btn btn-sm review-dl', download: memeFileName(m, i + 1),
       'aria-disabled': 'true', href: '#',
@@ -1147,11 +1183,25 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
     try { tplKeys = await pickTemplates(playerList.length, cfg.mode, playerList.map((p) => p.id), cfg.ownPacks ? lanState.ownPacks : null); } catch (e) { toast(e.message); return; }
     lanState.assignments = new Map(playerList.map((p, i) => [p.id, tplKeys[i]]));
 
-    // DataURLs für Gäste
+    // Öffentliche Server-Templates holen Gäste selbst (GIF bleibt animiert und
+    // HTTP-gecacht). Private/lokale müssen durch den WebSocket; das GIF-Budget
+    // hält die Nachricht unter dem 8-MB-Limit.
+    let publicSrv = new Set();
+    if (ServerAPI.available) {
+      try {
+        publicSrv = new Set((await ServerAPI.library()).filter((x) => x.public).map((x) => `srv:${x.id}`));
+      } catch {}
+    }
+    lanState.publicSrv = publicSrv;
     const tpls = {};
+    let gifBudget = 4 * 1024 * 1024;
     for (const k of new Set(tplKeys)) {
+      if (publicSrv.has(k)) continue;
       const tpl = await resolveTpl(k);
-      if (tpl) tpls[k] = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: '', bottom: '' }, 900);
+      if (!tpl) continue;
+      const { data, gifBytes } = await guestTemplatePayload(tpl, gifBudget);
+      tpls[k] = data;
+      gifBudget -= gifBytes;
     }
     lanState.tpls = tpls;
 
@@ -1261,11 +1311,12 @@ window.__lanHostReroll = async function (msg) {
   const tplKey = rand(pool);
   const tpl = await resolveTpl(tplKey);
   if (!tpl) return;
-  const dataUrl = await renderMemeToDataUrl({ blob: tpl.blob, id: tplKey, top: '', bottom: '' }, 900);
+  const publicSrv = lanState.publicSrv?.has(tplKey);
+  const payload = publicSrv ? null : (await guestTemplatePayload(tpl)).data;
   lanState.assignments.set(msg.selfId, tplKey);
   lanState.tpls = lanState.tpls || {};
-  lanState.tpls[tplKey] = dataUrl;
-  lanState.room?.send({ type: 'rerolled', playerId: msg.selfId, tplKey, name: tpl.name, tpl: dataUrl });
+  if (payload) lanState.tpls[tplKey] = payload;
+  lanState.room?.send({ type: 'rerolled', playerId: msg.selfId, tplKey, name: tpl.name, tpl: payload });
 };
 
 window.__lanAdvanceReview = function () {

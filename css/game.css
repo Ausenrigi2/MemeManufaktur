@@ -46,6 +46,16 @@
   background: var(--input); border: var(--border); border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
 }
+.vote-media-frame { position: relative; display: flex; justify-content: center; }
+.vote-media-frame canvas.vote-img {
+  width: auto; height: auto; max-width: 100%; max-height: min(52vh, 480px);
+}
+.vote-media-frame .meme-gif-overlay {
+  border: var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm);
+}
+.vote-media-frame .meme-gif-overlay canvas.vote-img {
+  border: 0; border-radius: 0; box-shadow: none; background: transparent;
+}
 .vote-card-live .vote-meta { text-align: center; padding: 10px 0 4px; font-size: 1.05rem; }
 .vote-btns-live { padding: 0; margin-top: 10px; gap: 8px; }
 .vote-btns-live .vbtn { padding: 12px 6px; font-size: 1rem; }

@@ -54,6 +54,14 @@ test('statische Dateien liefern ETag und antworten mit 304', async () => {
   assert.equal(again.status, 304);
 });
 
+test('statische Assets werden mit Brotli komprimiert und gecacht', async () => {
+  const res = await fetch(base + '/js/game.js', { headers: { 'Accept-Encoding': 'br' } });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-encoding'), 'br');
+  assert.equal(res.headers.get('vary'), 'Accept-Encoding');
+  assert.match(res.headers.get('cache-control'), /max-age=300/);
+});
+
 test('Web-App-Manifest wird mit korrektem MIME-Typ serviert', async () => {
   const res = await fetch(base + '/manifest.webmanifest');
   assert.equal(res.status, 200);
@@ -104,6 +112,18 @@ test('Upload-Roundtrip: Datei + Bibliothekseintrag + korrekt servter Type', asyn
   assert.equal(img.status, 200);
   assert.equal(img.headers.get('content-type'), 'image/png');
   assert.ok((await img.arrayBuffer()).byteLength > 0);
+});
+
+test('geteilte Uploads sind immutable und antworten mit 304 per ETag', async () => {
+  const id = 'smoke_cache_' + Math.random().toString(36).slice(2, 8);
+  assert.equal((await post({ id, data: PNG1 })).status, 200);
+  const first = await fetch(base + `/uploads/${id}`);
+  assert.equal(first.status, 200);
+  assert.match(first.headers.get('cache-control'), /immutable/);
+  const etag = first.headers.get('etag');
+  assert.ok(etag, 'Upload-ETag fehlt');
+  const again = await fetch(base + `/uploads/${id}`, { headers: { 'If-None-Match': etag } });
+  assert.equal(again.status, 304);
 });
 
 test('Client-Mime wird nicht als Content-Type übernommen (XSS-Schutz)', async () => {
