@@ -23,6 +23,25 @@ export function scoreRound({ memes, votes, players, round }) {
   }).sort((a, b) => b.pts - a.pts);
 }
 
+/** Hat diese Stimme das Meme bewertet? Peak zählt als Bewertung. */
+export function votedFor(vote, memePlayerId) {
+  if (!vote) return false;
+  return (vote.ups || []).includes(memePlayerId)
+    || (vote.downs || []).includes(memePlayerId)
+    || (vote.mehs || []).includes(memePlayerId)
+    || vote.peak === memePlayerId;
+}
+
+/** Haben alle aktiven Spieler:innen abgestimmt (das eigene Meme zählt nicht)? */
+export function allVotedFor({ votes, voters, memePlayerId }) {
+  const byId = new Map(votes.map((v) => [v.selfId, v]));
+  for (const id of voters) {
+    if (id === memePlayerId) continue;
+    if (!votedFor(byId.get(id), memePlayerId)) return false;
+  }
+  return true;
+}
+
 /** Addiert die Rundenpunkte und die Peak-Hälfte auf die Gesamtwertung. */
 export function applyTotals(totals, scores, votes) {
   for (const s of scores) totals.set(s.playerId, (totals.get(s.playerId) || 0) + s.pts);

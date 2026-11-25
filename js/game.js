@@ -5,7 +5,7 @@ import { zoneFor, layerPatch, normLayers } from './textzones.js';
 import { Packs, ServerAPI } from './packs.js';
 import { Room } from './net.js';
 import { createZip } from './zip.js';
-import { scoreRound, applyTotals } from './scoring.js';
+import { scoreRound, applyTotals, allVotedFor } from './scoring.js';
 
 // Spiel-Styles liegen in css/game.css; index.html bleibt unangetastet.
 if (!document.querySelector('link[data-game-css]')) {
@@ -95,21 +95,31 @@ const INSPO_BOTTOMS_EN = ['WI-FI DIES AGAIN', 'YOUR CHAT LEAVES THE ROOM', 'THE 
 
 function themesForLang() { return LS.get('lang', 'de') === 'en' ? THEMES_EN : THEMES; }
 
+const tplCache = new Map(); // key -> { blob, name }; Vorlagen sind unveränderlich
 export async function resolveTpl(key) {
   if (!key) return null;
+  if (tplCache.has(key)) return tplCache.get(key);
+  let out = null;
   if (window.__lanTpls?.[key]) {
     const res = await fetch(window.__lanTpls[key]);
-    if (!res.ok) return null;
-    return { blob: await res.blob(), name: key };
-  }
-  if (key.startsWith('srv:')) {
+    if (res.ok) out = { blob: await res.blob(), name: key };
+  } else if (key.startsWith('srv:')) {
     const res = await fetch(ServerAPI.url(key.slice(4)));
-    if (!res.ok) return null;
-    return { blob: await res.blob(), name: key };
+    if (res.ok) out = { blob: await res.blob(), name: key };
+  } else {
+    const tpl = await Packs.getTemplate(key);
+    if (tpl) out = { blob: tpl.blob, name: tpl.name };
   }
-  const tpl = await Packs.getTemplate(key);
-  return tpl ? { blob: tpl.blob, name: tpl.name } : null;
+  if (out) tplCache.set(key, out);
+  return out;
 }
+
+// Vorlagen im Hintergrund holen, während die Runde noch läuft.
+function preloadTemplates(keys = []) {
+  for (const key of keys) resolveTpl(key).catch(() => {});
+}
+
+function clearTplCache() { tplCache.clear(); }
 
 const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
   const fr = new FileReader();
@@ -119,9 +129,10 @@ const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
 });
 
 // Server-Templates laden Gäste direkt (GIFs bleiben animiert und HTTP-gecacht).
-// Lokale Templates müssen durch den WebSocket; kleine GIFs bleiben dabei GIF,
-// alles andere (und zu große GIFs) geht als kompaktes JPEG raus.
-const GIF_WS_LIMIT = 8 * 1024 * 1024;
+// Lokale Templates müssen durch den WebSocket; nur kleine GIFs bleiben GIF.
+// Größere GIFs gehen als kompaktes JPEG raus, damit Handys nicht ewig laden.
+const GIF_WS_LIMIT = 2 * 1024 * 1024;
+const REVIEW_WIDTH = 720; // reicht für die Review-Karten und hält die Nachricht klein
 async function guestTemplatePayload(tpl, gifBudget = GIF_WS_LIMIT) {
   if (tpl.blob?.type === 'image/gif' && tpl.blob.size <= Math.min(GIF_WS_LIMIT, gifBudget)) {
     return { data: await blobToDataUrl(tpl.blob), gifBytes: tpl.blob.size };
@@ -177,12 +188,47 @@ export async function openLobby(container) {
     return;
   }
 
-  const nameInput = el('input', { type: 'text', name: 'name', autocomplete: 'name', value: 'Gast_' + Math.floor(Math.random() * 900 + 100) });
+  const savedName = LS.get('playerName', '');
+  const guestName = () => savedName || 'Gast_' + Math.floor(Math.random() * 900 + 100);
+  const wantsCode = new URLSearchParams(location.hash.split('?')[1] || '').get('code');
+
+  // Einladungslink (#/spiel?code=XXXX): erst Name, dann direkt in die Lobby.
+  if (wantsCode) {
+    const code = String(wantsCode).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+    const nameInput = el('input', { type: 'text', name: 'name', autocomplete: 'name', maxlength: 40, value: guestName() });
+    const statusEl = el('p', { class: 'panel-note', 'aria-live': 'polite', hidden: true });
+    let joining = false;
+    async function submit(e) {
+      e?.preventDefault();
+      const name = nameInput.value.trim();
+      if (!name) { toast(t('spiel.yourName')); return; }
+      if (!/^[A-Z0-9]{4}$/.test(code)) { toast(t('lobby.codeBad')); return; }
+      if (joining) return;
+      joining = true;
+      LS.set('playerName', name);
+      await enterLobby({ code, host: false, name, statusEl });
+    }
+    container.append(el('div', { class: 'wrap' },
+      el('div', { class: 'card', style: 'max-width:440px;margin:40px auto' },
+        el('h2', {}, '🎉 ' + t('spiel.invite.joinTitle')),
+        el('p', { class: 'lobby-hint' }, t('spiel.invite.joinLead', { code })),
+        el('form', { onsubmit: submit },
+          el('label', {}, t('spiel.yourName')),
+          nameInput,
+          el('div', { class: 'lobby-actions' },
+            el('button', { class: 'btn btn-primary', type: 'submit' }, '🚀 ' + t('spiel.invite.join')),
+          ),
+        ),
+        statusEl,
+      ),
+    ));
+    nameInput.focus();
+    return;
+  }
+
+  const nameInput = el('input', { type: 'text', name: 'name', autocomplete: 'name', maxlength: 40, value: guestName() });
   const lobbyInput = el('input', { type: 'text', name: 'lobby', placeholder: t('lobby.name') });
   const codeInput = el('input', { type: 'text', name: 'code', maxlength: 4, 'aria-label': t('lobby.byCode') });
-  // Einladungslink (#/spiel?code=XXXX) füllt den Code direkt vor.
-  const wantsCode = new URLSearchParams(location.hash.split('?')[1] || '').get('code');
-  if (wantsCode) codeInput.value = wantsCode.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
   const statusEl = el('p', { class: 'panel-note', 'aria-live': 'polite', hidden: true });
   let poll = null;
   let entering = false;
@@ -192,6 +238,7 @@ export async function openLobby(container) {
     if (!name) { toast(t('spiel.yourName')); return; }
     if (entering) return;
     entering = true;
+    LS.set('playerName', name);
     clearInterval(poll);
     await enterLobby({ code, host: !!opts.host, name, statusEl, lobby: opts.lobby, pub: !!opts.pub });
   }
@@ -253,7 +300,7 @@ export async function openLobby(container) {
         el('h1', { html: t('home.title') }),
         el('p', { class: 'home-lead' }, t('home.lead')),
       ),
-      el('details', { class: 'home-setup', open: wantsCode ? '' : null },
+      el('details', { class: 'home-setup' },
         el('summary', {}, '👤 ' + t('home.setup')),
         el('div', { class: 'home-fields' },
           el('div', {}, el('label', {}, t('spiel.yourName')), nameInput),
@@ -313,6 +360,7 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
     let startedFlag = false; // true sobald „start“ im Raum angekommen ist
     let ownKeys = []; // eigene Server-Keys dieser Person ('srv:...')
     lanState.room = room;
+    clearTplCache();
     window.__mmInGame = true;
     document.body.classList.add('in-game');
 
@@ -441,10 +489,14 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
       leftGame = true;
       window.__mmInGame = false;
       window.__mmLeaveGame = null;
+      window.__lanRematch = null;
       lanState.phase = 'idle';
       clearTimeout(lanState.reviewTimer);
       lanState.reviewTimer = null;
       lanState.reviewAdvance = null;
+      clearTimeout(lanState.voteTimer);
+      lanState.voteTimer = null;
+      lanState.voteAdvance = null;
       document.body.classList.remove('in-game');
       if (lanState.room === room) lanState.room = null;
       room.close();
@@ -508,7 +560,7 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
           players.delete(msg.selfId);
           if (hostId === myId && startedFlag) {
             if (lanState.collecting) handleHostSubmit({ selfId: msg.selfId, layers: [] });
-            if (lanState.voting) window.__lanHostVote({ selfId: msg.selfId, ups: [], downs: [], mehs: [], peak: null });
+            if (lanState.voting) window.__lanHostVote({ selfId: msg.selfId, gone: true });
           }
           if (hostId === msg.selfId) {
             if (!startedFlag) {
@@ -530,6 +582,13 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
         case 'start':
           startedFlag = true;
           if (msg.hostId !== myId) announceStart(msg);
+          break;
+        case 'templates':
+          Object.assign(window.__lanTpls = window.__lanTpls || {}, msg.tpls || {});
+          preloadTemplates(msg.keys);
+          break;
+        case 'vote-next':
+          window.__lanVoteNext?.(msg.index);
           break;
         case 'turn':
           // Alle erstellen parallel – nur der eigene Turn betrifft einen selbst
@@ -567,11 +626,16 @@ function enterLobby({ code, host, name, statusEl, lobby, pub }) {
     // Host-Logik in derselben Closure – über Modulebene erreichbar:
     function startFromLobby() { window.__lanHostStart(cfg, room, players, myId); }
     function hostHandleVote(msg) { window.__lanHostVote(msg); }
+    window.__lanRematch = () => {
+      if (leftGame || hostId !== myId) return;
+      if (players.size < 2) { toast(t('spiel.lobby.needPlayers')); return; }
+      startFromLobby();
+    };
   });
 }
 
-// ---------- LAN Host/Guest-Phasen (auf Modulebene, da Closure-Shared-State nötig) ----------
-const lanState = { cfg: null, room: null, round: 0, rounds: 3, memes: [], votes: [], totals: new Map(), theme: null, players: [], assignments: new Map(), tpls: {}, turnAdvance: null, reviewAdvance: null, reviewTimer: null, ownPacks: new Map(), collecting: false, voting: false, allMemes: [], phase: 'idle' }; // ownPacks: selfId -> [srv-Keys]
+// ---------- Host/Guest-Phasen (auf Modulebene, da Closure-Shared-State nötig) ----------
+const lanState = { cfg: null, room: null, round: 0, rounds: 3, memes: [], votes: [], totals: new Map(), theme: null, players: [], assignments: new Map(), tpls: {}, publicInfo: new Map(), turnAdvance: null, reviewAdvance: null, reviewTimer: null, voteTimer: null, voteIndex: 0, voteMemes: [], voteActive: null, voteAdvance: null, ownPacks: new Map(), collecting: false, voting: false, allMemes: [], phase: 'idle' }; // ownPacks: selfId -> [srv-Keys]
 
 /** Host: Caption aus einer „submit“-Nachricht in die laufende Runde übernehmen */
 export function handleHostSubmit(msg) {
@@ -580,20 +644,26 @@ export function handleHostSubmit(msg) {
   const top = String(msg.top ?? '').slice(0, 200);
   const bottom = String(msg.bottom ?? '').slice(0, 200);
   const layers = normLayers(msg.layers);
+  const p = lanState.players.find((x) => x.id === msg.selfId);
+  if (!p) return;
+  // Nur Templates dieser Runde akzeptieren; sonst fällt der Host auf die Zuteilung zurück.
+  const requested = typeof msg.tplKey === 'string' ? msg.tplKey : null;
+  const tplKey = requested && lanState.validTpls?.has(requested) ? requested : (lanState.assignments.get(p.id) || null);
   const found = lanState.memes.find((m) => m.playerId === msg.selfId);
   if (found) {
     found.top = top; found.bottom = bottom; found.layers = layers;
+    if (tplKey) found.tplKey = tplKey;
     lanState.turnAdvance?.();
     return;
   }
-  const p = lanState.players.find((x) => x.id === msg.selfId);
-  if (!p) return;
-  lanState.memes.push({ playerId: p.id, name: p.name, top, bottom, layers, tplKey: lanState.assignments.get(p.id) || null });
+  lanState.memes.push({ playerId: p.id, name: p.name, top, bottom, layers, tplKey });
   lanState.turnAdvance?.();
 }
 
 async function announceStart(msg) {
   lanState.phase = 'start';
+  clearTplCache();
+  window.__lanTpls = {};
   lanState.cfg = msg.cfg;
   lanState.round = 0;
   lanState.totals = new Map(msg.players.map((p) => [p.id, 0]));
@@ -611,6 +681,7 @@ function doTurn(msg) {
   if (msg.tpls) Object.assign(window.__lanTpls = window.__lanTpls || {}, msg.tpls);
   const app = document.getElementById('app');
   let settled = false;
+  let currentTplKey = msg.tplKey; // was der Editor wirklich anzeigt – auch nach einem Reroll
 
   async function setupPreview() {
     const tpl = await resolveTpl(msg.tplKey);
@@ -659,7 +730,9 @@ function doTurn(msg) {
       const layers = mc.layers.map((l) => ({ text: String(l.text).slice(0, 200), xF: +(l.x / mc.cw).toFixed(3), yF: +(l.y / mc.ch).toFixed(3), fsF: +(l.fontSize / base).toFixed(3) }));
       mc.destroy();
       lanState.rerollApply = null;
-      room?.send({ type: 'submit', selfId: room.selfId, layers });
+      // Das tatsächlich bearbeitete Template mitschicken: verhindert, dass ein
+      // spätes Reroll im Review ein anderes Bild zeigt als im Editor.
+      room?.send({ type: 'submit', selfId: room.selfId, layers, tplKey: currentTplKey });
       showSubmitted(preview);
     }
 
@@ -713,6 +786,7 @@ function doTurn(msg) {
         const tpl = await resolveTpl(m.tplKey);
         if (!tpl) throw new Error('Template');
         await mc.setImage(tpl.blob, m.name || m.tplKey);
+        currentTplKey = m.tplKey;
       } catch (e) {
         console.error(e);
         toast('⚠️ ' + t('spiel.turn.error'));
@@ -794,6 +868,7 @@ function doTurn(msg) {
 function doVote(msg) {
   lanState.phase = 'vote';
   if (msg.tpls) Object.assign(window.__lanTpls = window.__lanTpls || {}, msg.tpls);
+  window.__lanVoteNext = null;
   const app = document.getElementById('app');
   const room = lanState.room;
   // Der Host hat die Reihenfolge gemischt; alle sehen exakt dieselbe Reihenfolge.
@@ -801,6 +876,7 @@ function doVote(msg) {
   const myId = msg.myId;
 
   if (!list.length) {
+    window.__lanVoteNext = null;
     room?.send({ type: 'vote', selfId: room.selfId, ups: [], downs: [], mehs: [], peak: null });
     app.innerHTML = '';
     app.append(el('div', { class: 'wrap phase-screen' },
@@ -814,11 +890,11 @@ function doVote(msg) {
     return;
   }
 
-  const perMeme = 20; // Sekunden pro Meme, für alle gleich
-  const startedAt = Date.now();
+  const perMeme = Number(msg.perMeme) || 20; // Sekunden pro Meme, für alle gleich
   const ups = new Set(), downs = new Set(), mehs = new Set();
   const cache = {};
   let peak = null, ended = false, idx = 0, showSeq = 0, clock = null;
+  let memeStartedAt = Date.now();
 
   const mediaFrame = el('div', { class: 'vote-media-frame' });
   let liveView = null;
@@ -859,11 +935,34 @@ function doVote(msg) {
     dnB.setAttribute('aria-pressed', String(downs.has(cur.playerId)));
     mehB.setAttribute('aria-pressed', String(mehs.has(cur.playerId)));
     pkB.setAttribute('aria-pressed', String(peak === cur.playerId));
-    upB.disabled = dnB.disabled = pkB.disabled = mehB.disabled = mine || ended;
+    // Peak gibt es nur einmal pro Runde: auf anderen Memes ist der Button gesperrt.
+    const peakTaken = peak !== null && peak !== cur.playerId;
+    upB.disabled = dnB.disabled = mehB.disabled = mine || ended;
+    pkB.disabled = mine || ended || peakTaken;
     dotBtns.forEach((b, i) => b.classList.toggle('active', i === idx));
     ownNote.hidden = !mine;
     step.textContent = ended ? t('spiel.vote.wait') : `${idx + 1} / ${list.length}`;
   }
+
+  function endVote() {
+    if (ended) return;
+    ended = true;
+    if (clock) clearInterval(clock);
+    clock = null;
+    secs.textContent = '0 s';
+    timerWrap.firstElementChild.style.width = '0%';
+    sendVote();
+  }
+
+  function nextMeme(index) {
+    if (ended || !mediaFrame.isConnected) return;
+    if (index >= list.length) { endVote(); return; }
+    idx = index;
+    memeStartedAt = Date.now();
+    show();
+    paint();
+  }
+  window.__lanVoteNext = nextMeme;
 
   async function show() {
     const seq = ++showSeq;
@@ -917,25 +1016,15 @@ function doVote(msg) {
     sendVote();
   });
 
-  // Eine gemeinsame Uhr: alle Geräte zeigen denselben Index, auch wenn das eigene Meme dran ist.
+  // Pro Meme eine eigene Uhr. Der Host schaltet weiter, sobald alle gevotet
+  // haben; die lokale Uhr ist nur der Fallback nach Ablauf der vollen Zeit.
   clock = setInterval(() => {
     if (!mediaFrame.isConnected) { clearInterval(clock); clearLiveView(); return; }
-    const elapsed = Date.now() - startedAt;
-    const total = list.length * perMeme * 1000;
-    if (elapsed >= total) {
-      clearInterval(clock);
-      ended = true;
-      secs.textContent = '0 s';
-      timerWrap.firstElementChild.style.width = '0%';
-      sendVote();
-      return;
-    }
-    const next = Math.floor(elapsed / (perMeme * 1000));
-    const left = perMeme - (elapsed % (perMeme * 1000)) / 1000;
-    secs.textContent = Math.ceil(left) + ' s';
-    timerWrap.firstElementChild.style.width = `${(left / perMeme) * 100}%`;
+    const left = perMeme - (Date.now() - memeStartedAt) / 1000;
+    secs.textContent = Math.max(0, Math.ceil(left)) + ' s';
+    timerWrap.firstElementChild.style.width = `${Math.max(0, left / perMeme) * 100}%`;
     timerWrap.classList.toggle('warn', left <= 3);
-    if (next !== idx) { idx = next; show(); }
+    if (left <= 0) nextMeme(idx + 1);
   }, 100);
 
   app.innerHTML = '';
@@ -981,10 +1070,10 @@ function voteSummary(m) {
 }
 
 /** Galerie für Runden-Review und Game-Review; liefert Karten + Download-Daten. */
-function buildMemeReview(memes) {
+function buildMemeReview(memes, lazy = false) {
   const grid = el('div', { class: 'review-grid' });
   const items = memes.map((m, i) => {
-    const img = el('img', { class: 'review-img', alt: '', loading: 'lazy', decoding: 'async' });
+    const img = el('img', { class: 'review-img', alt: '', loading: lazy ? 'lazy' : 'eager', decoding: 'async' });
     const dl = el('a', {
       class: 'btn btn-sm review-dl', download: memeFileName(m, i + 1),
       'aria-disabled': 'true', href: '#',
@@ -999,17 +1088,25 @@ function buildMemeReview(memes) {
       el('div', { class: 'voters' }, voteSummary(m)),
       dl,
     ));
-    const item = { m, url: null, promise: null };
-    item.promise = (async () => {
-      const tpl = await resolveTpl(m.tplKey);
-      if (!tpl) return null;
-      const url = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom, layers: m.layers }, 900);
-      item.url = url;
-      img.src = url;
-      dl.href = url;
+    const item = { m, url: m.img || null, promise: null };
+    if (m.img) {
+      // Der Host hat das Review-Bild schon gerendert – sofort anzeigen.
+      img.src = m.img;
+      dl.href = m.img;
       dl.removeAttribute('aria-disabled');
-      return url;
-    })().catch(() => null);
+      item.promise = Promise.resolve(m.img);
+    } else {
+      item.promise = (async () => {
+        const tpl = await resolveTpl(m.tplKey);
+        if (!tpl) return null;
+        const url = await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom, layers: m.layers }, REVIEW_WIDTH);
+        item.url = url;
+        img.src = url;
+        dl.href = url;
+        dl.removeAttribute('aria-disabled');
+        return url;
+      })().catch(() => null);
+    }
     return item;
   });
   return { grid, items };
@@ -1030,6 +1127,7 @@ function saveBlob(blob, filename) {
 
 function doResult(msg) {
   lanState.phase = 'review';
+  window.__lanVoteNext = null;
   const app = document.getElementById('app');
   const isFinal = msg.round >= msg.rounds;
   const isHost = lanState.hostId === lanState.room?.selfId;
@@ -1073,12 +1171,14 @@ function doResult(msg) {
 
 function doFinal(msg) {
   lanState.phase = 'final';
+  window.__lanVoteNext = null;
   confetti();
   const app = document.getElementById('app');
+  const isHost = lanState.hostId === lanState.room?.selfId;
   const medals = ['🥇', '🥈', '🥉'];
   const allMemes = (msg.allMemes?.length ? msg.allMemes : msg.best || [])
     .slice().sort((a, b) => (b.pts || 0) - (a.pts || 0));
-  const { grid, items } = buildMemeReview(allMemes);
+  const { grid, items } = buildMemeReview(allMemes, true);
 
   const zipBtn = el('button', { class: 'btn btn-primary', type: 'button' }, '⬇ ' + t('spiel.final.zip'));
   zipBtn.addEventListener('click', async () => {
@@ -1113,6 +1213,10 @@ function doFinal(msg) {
     clearTimeout(lanState.reviewTimer);
     lanState.reviewTimer = null;
     lanState.reviewAdvance = null;
+    clearTimeout(lanState.voteTimer);
+    lanState.voteTimer = null;
+    lanState.voteAdvance = null;
+    window.__lanRematch = null;
     document.body.classList.remove('in-game');
     if (location.hash === '#/spiel') window.dispatchEvent(new CustomEvent('mm:goto', { detail: '#/spiel' }));
     else location.hash = '#/spiel';
@@ -1142,7 +1246,10 @@ function doFinal(msg) {
       grid,
     ),
     el('div', { class: 'final-actions' },
-      el('button', { class: 'btn btn-primary', type: 'button', onclick: replay }, '🔁 ' + t('spiel.final.again')),
+      isHost
+        ? el('button', { class: 'btn btn-primary', type: 'button', onclick: () => window.__lanRematch?.() }, '🔁 ' + t('spiel.final.again'))
+        : el('p', { class: 'review-wait', role: 'status' }, '⏳ ' + t('spiel.final.waitRematch')),
+      el('button', { class: 'btn', type: 'button', onclick: replay }, '🏠 ' + t('spiel.final.leave')),
     ),
   ));
   window.scrollTo(0, 0);
@@ -1150,6 +1257,7 @@ function doFinal(msg) {
 
 // Host-Seite (wird von der Lobby-Closure aufgerufen)
 window.__lanHostStart = function (cfg, room, playersMap, myId) {
+  if (!['idle', 'final'].includes(lanState.phase)) return; // Doppelstart/Rematch-Spam
   lanState.cfg = cfg;
   lanState.room = room;
   lanState.hostId = myId;
@@ -1162,8 +1270,17 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
   lanState.reviewAdvance = null;
   lanState.collecting = false;
   lanState.voting = false;
+  lanState.voteActive = null;
+  lanState.voteMemes = [];
+  lanState.voteIndex = 0;
+  clearTimeout(lanState.voteTimer);
+  lanState.voteTimer = null;
+  lanState.voteAdvance = null;
   const playerList = [...playersMap.entries()].map(([id, name]) => ({ id, name }));
   if (playerList.length < 2) { toast(t('spiel.lobby.needPlayers')); return; }
+  lanState.phase = 'start';
+  clearTplCache();
+  window.__lanTpls = {};
   lanState.players = playerList;
 
   async function runRound(r) {
@@ -1174,30 +1291,37 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
     const theme = cfg.mode === 'theme' ? themes[(r * 7) % themes.length] : null;
     lanState.theme = theme;
     let tplKeys;
-    try { tplKeys = await pickTemplates(playerList.length, cfg.mode, playerList.map((p) => p.id), cfg.ownPacks ? lanState.ownPacks : null); } catch (e) { toast(e.message); return; }
+    try { tplKeys = await pickTemplates(playerList.length, cfg.mode, playerList.map((p) => p.id), cfg.ownPacks ? lanState.ownPacks : null); } catch (e) { toast(e.message); lanState.phase = 'idle'; return; }
     lanState.assignments = new Map(playerList.map((p, i) => [p.id, tplKeys[i]]));
+    lanState.validTpls = new Set(tplKeys);
 
     // Öffentliche Server-Templates holen Gäste selbst (GIF bleibt animiert und
-    // HTTP-gecacht). Private/lokale müssen durch den WebSocket; das GIF-Budget
-    // hält die Nachricht unter dem 8-MB-Limit.
-    let publicSrv = new Set();
+    // HTTP-gecacht). Private/lokale gehen einmal an den ganzen Raum – nicht in
+    // jeder Turn-Nachricht erneut, sonst laden Handys minutenlang.
+    let publicInfo = new Map();
     if (ServerAPI.available) {
       try {
-        publicSrv = new Set((await ServerAPI.library()).filter((x) => x.public).map((x) => `srv:${x.id}`));
+        publicInfo = new Map((await ServerAPI.library()).filter((x) => x.public).map((x) => [`srv:${x.id}`, x]));
       } catch {}
     }
-    lanState.publicSrv = publicSrv;
+    lanState.publicInfo = publicInfo;
     const tpls = {};
-    let gifBudget = 8 * 1024 * 1024;
+    let gifBudget = GIF_WS_LIMIT;
     for (const k of new Set(tplKeys)) {
-      if (publicSrv.has(k)) continue;
-      const tpl = await resolveTpl(k);
-      if (!tpl) continue;
-      const { data, gifBytes } = await guestTemplatePayload(tpl, gifBudget);
-      tpls[k] = data;
-      gifBudget -= gifBytes;
+      // Kleine öffentliche Templates holen Gäste direkt (HTTP-cachebar, GIF animiert).
+      // Große bekommen ein kompaktes Vorschaubild, damit Handys nicht ewig laden.
+      const info = publicInfo.get(k);
+      if (info && (info.size || 0) <= GIF_WS_LIMIT) continue;
+      try {
+        const tpl = await resolveTpl(k);
+        if (!tpl) continue;
+        const { data, gifBytes } = await guestTemplatePayload(tpl, gifBudget);
+        tpls[k] = data;
+        gifBudget -= gifBytes;
+      } catch { /* eine defekte Vorlage soll die Runde nicht blockieren */ }
     }
     lanState.tpls = tpls;
+    room.send({ type: 'templates', tpls, keys: [...new Set(tplKeys)] });
 
     // Turn-Phase: alle erstellen parallel, gemeinsames Zeitfenster
     const until = Date.now() + cfg.timeSec * 1000;
@@ -1205,7 +1329,7 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
     for (let i = 0; i < playerList.length; i++) {
       room.send({
         type: 'turn', playerId: playerList[i].id, name: playerList[i].name, round: r,
-        theme, tplKey: tplKeys[i], tpls, until, timeSec: cfg.timeSec,
+        theme, tplKey: tplKeys[i], until, timeSec: cfg.timeSec,
       });
     }
     let turnDone = false;
@@ -1229,28 +1353,70 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
 
     function startVoting() {
       const memes = shuffle(lanState.memes.map((m) => ({ playerId: m.playerId, name: m.name, top: m.top, bottom: m.bottom, layers: m.layers, tplKey: m.tplKey })));
-      // Alle voten gleichzeitig in derselben zufälligen Reihenfolge
+      lanState.voteMemes = memes;
+      lanState.voteIndex = 0;
+      lanState.voteActive = new Set(playerList.map((p) => p.id));
       lanState.voting = true;
-      for (const v of playerList) {
-        room.send({ type: 'voting-start', myId: v.id, memes, tpls });
-      }
+      const perMeme = 20;
+
+      // Review-Bilder schon während der Abstimmung auf dem Host rendern.
+      // Gäste bekommen danach fertige JPEGs, statt selbst GIFs zu dekodieren.
+      const reviewImages = (async () => {
+        const imgs = new Map();
+        for (const m of memes) {
+          try {
+            const tpl = await resolveTpl(m.tplKey);
+            if (!tpl) continue;
+            imgs.set(m.playerId, await renderMemeToDataUrl({ blob: tpl.blob, id: tpl.id, top: m.top, bottom: m.bottom, layers: m.layers }, REVIEW_WIDTH));
+          } catch { /* dann rendert der Gast zur Not selbst */ }
+        }
+        return imgs;
+      })();
+
       let voteDone = false;
+      let voteTimer = null;
+      const stopVoteTimer = () => {
+        clearTimeout(voteTimer);
+        voteTimer = null;
+        lanState.voteTimer = null;
+      };
       const finishVote = () => {
         if (voteDone) return;
         voteDone = true;
+        stopVoteTimer();
         lanState.voting = false;
+        lanState.voteAdvance = null;
         for (const v of playerList) if (!lanState.votes.some((x) => x.selfId === v.id)) lanState.votes.push({ selfId: v.id, ups: [], downs: [], mehs: [], peak: null });
-        tally();
+        tally(reviewImages);
       };
-      // Votes zählen sofort, aber die volle Sehzeit bleibt: 20 s pro Meme
-      // plus 5 s Puffer für die letzte automatische Stimme.
-      setTimeout(finishVote, (playerList.length * 20 + 5) * 1000);
+      // Sobald alle für das aktuelle Meme gestimmt haben, geht es sofort weiter.
+      const advanceVote = () => {
+        if (voteDone) return;
+        lanState.voteIndex += 1;
+        if (lanState.voteIndex >= memes.length) { finishVote(); return; }
+        room.send({ type: 'vote-next', index: lanState.voteIndex });
+        stopVoteTimer();
+        voteTimer = setTimeout(advanceVote, perMeme * 1000);
+        lanState.voteTimer = voteTimer;
+      };
+      lanState.voteAdvance = advanceVote;
+      for (const v of playerList) {
+        room.send({ type: 'voting-start', myId: v.id, memes, perMeme });
+      }
+      voteTimer = setTimeout(advanceVote, perMeme * 1000);
+      lanState.voteTimer = voteTimer;
     }
 
-    function tally() {
+    async function tally(reviewImages) {
       // Punkte: ±1000 relativ zur Spielerzahl (Krocha − Gschissn), dazu +10 pro ⛰️ Peak.
       const scores = scoreRound({ memes: lanState.memes, votes: lanState.votes, players: playerList, round: r });
       if (!cfg.relaxed) applyTotals(lanState.totals, scores, lanState.votes);
+      let imgs = new Map();
+      try { imgs = await reviewImages; } catch {}
+      for (const s of scores) {
+        const img = imgs.get(s.playerId);
+        if (img) s.img = img;
+      }
 
       lanState.allMemes.push(...scores);
       const isLast = r >= lanState.rounds;
@@ -1287,10 +1453,20 @@ window.__lanHostStart = function (cfg, room, playersMap, myId) {
 
 window.__lanHostVote = function (msg) {
   if (!lanState.voting) return; // späte Stimmen nach der Auswertung ignorieren
-  const next = { selfId: msg.selfId, ups: msg.ups || [], downs: msg.downs || [], mehs: msg.mehs || [], peak: msg.peak || null };
-  const existing = lanState.votes.find((v) => v.selfId === msg.selfId);
-  if (existing) Object.assign(existing, next);
-  else lanState.votes.push(next);
+  if (msg?.gone) {
+    lanState.voteActive?.delete(msg.selfId);
+    lanState.votes = lanState.votes.filter((v) => v.selfId !== msg.selfId);
+  } else {
+    const next = { selfId: msg.selfId, ups: msg.ups || [], downs: msg.downs || [], mehs: msg.mehs || [], peak: msg.peak || null };
+    const existing = lanState.votes.find((v) => v.selfId === msg.selfId);
+    if (existing) Object.assign(existing, next);
+    else lanState.votes.push(next);
+  }
+  const cur = lanState.voteMemes?.[lanState.voteIndex];
+  if (cur && lanState.voteActive
+    && allVotedFor({ votes: lanState.votes, voters: lanState.voteActive, memePlayerId: cur.playerId })) {
+    lanState.voteAdvance?.();
+  }
 };
 
 window.__lanHostReroll = async function (msg) {
@@ -1302,9 +1478,11 @@ window.__lanHostReroll = async function (msg) {
   const tplKey = rand(pool);
   const tpl = await resolveTpl(tplKey);
   if (!tpl) return;
-  const publicSrv = lanState.publicSrv?.has(tplKey);
-  const payload = publicSrv ? null : (await guestTemplatePayload(tpl)).data;
+  const info = lanState.publicInfo?.get(tplKey);
+  const needsPayload = !info || (info.size || 0) > GIF_WS_LIMIT;
+  const payload = needsPayload ? (await guestTemplatePayload(tpl)).data : null;
   lanState.assignments.set(msg.selfId, tplKey);
+  lanState.validTpls?.add(tplKey);
   lanState.tpls = lanState.tpls || {};
   if (payload) lanState.tpls[tplKey] = payload;
   lanState.room?.send({ type: 'rerolled', playerId: msg.selfId, tplKey, name: tpl.name, tpl: payload });

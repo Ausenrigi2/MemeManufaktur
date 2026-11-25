@@ -102,7 +102,7 @@
 .turn-layout { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr); gap: 22px; align-items: start; }
 .turn-canvas { display: flex; flex-direction: column; min-width: 0; }
 .turn-canvas > .btn { align-self: flex-start; margin-top: 8px; }
-.turn-canvas .meme-preview { margin: 0; }
+.turn-canvas .meme-preview { width: fit-content; max-width: 100%; margin: 0 auto; }
 .turn-canvas .meme-preview canvas {
   width: auto; height: auto; max-width: 100%;
   max-height: min(54vh, 560px); margin: 0 auto;
@@ -163,8 +163,9 @@
   padding: 10px; background: var(--card); color: var(--ink);
   border: 2px solid rgba(255, 255, 255, 0.7); border-radius: 16px; box-shadow: var(--shadow-sm);
 }
-.review-img-wrap { overflow: hidden; background: #fff; border: 2px solid var(--line); border-radius: 10px; }
-.review-img { display: block; width: 100%; aspect-ratio: 1; object-fit: contain; background: #fff; }
+.review-img-wrap { display: grid; place-items: center; overflow: hidden; background: #fff; border: 2px solid var(--line); border-radius: 10px; }
+/* Kein fixes Quadrat: das Bild behält das Seitenverhältnis seines Templates. */
+.review-img { display: block; width: auto; max-width: 100%; height: auto; max-height: 65vh; object-fit: contain; background: #fff; }
 .review-rank {
   position: absolute; top: 16px; left: 16px; z-index: 2;
   padding: 2px 8px; background: var(--yellow); color: var(--ink);

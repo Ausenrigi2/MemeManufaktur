@@ -1,4 +1,4 @@
-/* ============ Chrome: Skip-Link, Server-Status, Fehlerkarte ============ */
+/* ============ Chrome: Skip-Link, Fehlerkarte ============ */
 
 .skip-link {
   position: fixed; top: -100px; left: 12px; z-index: 100;
@@ -10,14 +10,6 @@
 
 #app { scroll-margin-top: 88px; }
 #app:focus { outline: none; } /* main ist kein Bedienelement – Fokus dient nur Screenreadern */
-
-.server-status { display: inline-flex; align-items: center; gap: 7px; }
-.server-status-dot {
-  width: 10px; height: 10px; flex: none; border-radius: 50%;
-  border: 2px solid var(--ink); background: var(--input);
-}
-.server-status[data-state="online"] .server-status-dot { background: var(--green); }
-.server-status[data-state="local"] .server-status-dot { background: var(--yellow); }
 
 .error-card { margin-top: 34px; text-align: center; }
 .error-card p { max-width: 46ch; margin-inline: auto; color: var(--muted); }

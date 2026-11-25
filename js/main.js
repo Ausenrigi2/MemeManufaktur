@@ -87,10 +87,6 @@ function buildChrome() {
     el('div', { class: 'wrap' },
       el('span', { 'data-i18n': 'footer.left' }),
       el('span', { 'data-i18n': 'footer.right' }),
-      el('span', { class: 'server-status', 'data-state': 'unknown', role: 'status' },
-        el('span', { class: 'server-status-dot', 'aria-hidden': 'true' }),
-        el('span', { 'data-i18n': 'server.checking' }),
-      ),
     ),
   );
 
@@ -103,17 +99,6 @@ function buildChrome() {
     e.preventDefault();
     app.focus();
   });
-}
-
-function updateServerStatus(up = ServerAPI.available) {
-  const box = document.querySelector('.server-status');
-  if (!box) return;
-  const state = up === true ? 'online' : up === false ? 'local' : 'unknown';
-  const key = `server.${state === 'unknown' ? 'checking' : state}`;
-  box.dataset.state = state;
-  const label = box.querySelector('[data-i18n]');
-  label.dataset.i18n = key;
-  label.textContent = t(key);
 }
 
 function renderError(app) {
@@ -148,8 +133,7 @@ async function boot() {
   document.documentElement.lang = LS.get('lang', 'de');
   buildChrome();
   try { await Packs.removeBuiltins(); } catch (e) { console.warn('Template-Bereinigung:', e); }
-  const serverUp = await ServerAPI.check();
-  updateServerStatus(serverUp);
+  await ServerAPI.check();
   try { window.__serverTpls = ServerAPI.available ? await ServerAPI.library() : []; } catch { window.__serverTpls = []; }
   route(false);
   window.addEventListener('hashchange', () => route());
@@ -159,16 +143,13 @@ async function boot() {
     if (location.hash === target) route();
     else location.hash = target;
   });
-  // Server-Status im Footer regelmäßig prüfen, damit ein Neustart nicht unsichtbar bleibt.
+  // Verbindung regelmäßig prüfen, damit ein Neustart nicht unsichtbar bleibt.
   setInterval(async () => {
     if (document.hidden) return;
     try {
-      const r = await fetch('/health', { cache: 'no-store' });
-      ServerAPI.available = r.ok;
-      updateServerStatus(r.ok);
+      ServerAPI.available = (await fetch('/health', { cache: 'no-store' })).ok;
     } catch {
       ServerAPI.available = false;
-      updateServerStatus(false);
     }
   }, 30000);
 }

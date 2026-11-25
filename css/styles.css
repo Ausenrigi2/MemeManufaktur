@@ -351,9 +351,10 @@ select { cursor: pointer; }
 .layer-item .txt { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stage-wrap { position: sticky; top: 92px; }
 .stage {
-  position: relative; display: grid; place-items: center; background: var(--input);
+  position: relative; display: grid; place-items: center; width: fit-content; max-width: 100%;
+  margin-inline: auto; background: var(--input);
   border: var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
-  padding: 18px; min-height: 320px;
+  padding: 18px;
 }
 .stage canvas { display: block; max-width: 100%; height: auto; border: var(--border); border-radius: 12px; background: var(--input); touch-action: none; }
 .stage-hint { position: absolute; bottom: 8px; right: 14px; font-size: 0.75rem; color: var(--muted); font-weight: 800; }

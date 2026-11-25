@@ -281,7 +281,10 @@ export class MemeCanvas {
     if (!lines.length) { l._box = null; return; }
     const lineHeight = fs * 1.18;
     const totalH = lines.length * lineHeight;
-    let topY = l.y - totalH / 2;
+    // Text bleibt immer im Bild – auch wenn die Ebene nah am Rand liegt.
+    const edge = Math.max(4, this.cw * 0.02);
+    const maxTop = Math.max(edge, this.ch - edge - totalH);
+    const topY = Math.min(Math.max(l.y - totalH / 2, edge), maxTop);
     let minW = 0;
     const widths = lines.map((ln) => { const w = ctx.measureText(ln).width; minW = Math.max(minW, w); return w; });
     let minX = Infinity, maxX = -Infinity;
@@ -294,6 +297,7 @@ export class MemeCanvas {
       if (l.align === 'left') cx = this.cw * 0.04 + widths[i] / 2 + xOffset;
       else if (l.align === 'right') cx = this.cw * 0.96 - widths[i] / 2 + xOffset;
       else cx = l.x;
+      cx = Math.min(this.cw - edge - widths[i] / 2, Math.max(edge + widths[i] / 2, cx));
 
       if (l.highlight) {
         ctx.fillStyle = l.highlightColor;

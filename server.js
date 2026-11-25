@@ -522,7 +522,7 @@ function broadcastText(code, text) {
 function broadcastJson(code, obj) { broadcastText(code, JSON.stringify(obj)); }
 
 const PLAYER_TYPES = new Set(['submit', 'vote', 'ownpack']);
-const CONTROL_TYPES = new Set(['start', 'turn', 'voting-start', 'result', 'final', 'abort', 'maxplayers']);
+const CONTROL_TYPES = new Set(['start', 'turn', 'templates', 'voting-start', 'vote-next', 'result', 'final', 'abort', 'maxplayers']);
 const SERVER_TYPES = new Set(['roster', 'joined', 'left', 'rejected']);
 
 function relayMessage(sock, payload) {

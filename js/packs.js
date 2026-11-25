@@ -4,7 +4,7 @@ import { uid, toast } from './lib.js';
 const DB_NAME = 'mememanufaktur';
 const DB_VERSION = 1;
 
-const MAX_IMAGE_SIDE = 1600;
+const MAX_IMAGE_SIDE = 1280; // entspricht der Render-Grenze des Editors
 const OPTIMIZE_MIN_BYTES = 128 * 1024;
 
 // Große Bilder vor dem Speichern/Upload verkleinern. GIFs und SVGs bleiben
@@ -23,7 +23,7 @@ export async function optimizeImage(file) {
     bitmap.close?.();
     // PNG (evtl. Transparenz) -> WebP, Fotos -> JPEG. Browser-Fallback wird respektiert.
     const target = file.type === 'image/png' ? 'image/webp' : 'image/jpeg';
-    const blob = await new Promise((res) => canvas.toBlob(res, target, 0.9));
+    const blob = await new Promise((res) => canvas.toBlob(res, target, 0.88));
     if (!blob || blob.size >= file.size) return file;
     const ext = blob.type === 'image/webp' ? '.webp' : blob.type === 'image/png' ? '.png' : '.jpg';
     return new File([blob], file.name.replace(/\.[^.]+$/, '') + ext, { type: blob.type, lastModified: file.lastModified });

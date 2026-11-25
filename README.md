@@ -140,7 +140,7 @@ and the game. The older “Also save to server” checkbox is still available wh
 uploading a local pack. If the server library is empty, the game asks the host
 to upload templates first.
 
-Large images are downscaled to max. 1600 px and re-encoded in the browser
+Large images are downscaled to max. 1280 px and re-encoded in the browser
 before upload (GIFs keep their animation). Static files are served with
 Brotli/Gzip, immutable caching for shared uploads and lazy/async image decoding.
 Multi-select uploads are checked against the remaining account quota first and

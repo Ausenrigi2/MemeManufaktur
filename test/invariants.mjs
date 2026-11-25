@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 
 import { I18N, roomCode, shuffle } from '../js/lib.js';
 import { createZip } from '../js/zip.js';
-import { scoreRound, applyTotals } from '../js/scoring.js';
+import { scoreRound, applyTotals, votedFor, allVotedFor } from '../js/scoring.js';
 
 test('DE und EN haben exakt dieselben i18n-Keys', () => {
   const de = Object.keys(I18N.de).sort();
@@ -86,6 +86,22 @@ test('scoreRound zählt Krocha, Gschissn, Najo und Peak korrekt', () => {
   assert.equal(totals.get('a'), 765);  // 510 + halber Peak auf B
   assert.equal(totals.get('b'), 265);  // 510 + halber Peak auf C
   assert.equal(totals.get('c'), -235); // -490 + halber Peak auf A
+});
+
+test('allVotedFor erkennt vollständige Runden und zählt Peak als Stimme', () => {
+  const votes = [
+    { selfId: 'a', ups: ['b'], downs: [], mehs: [], peak: null },
+    { selfId: 'b', ups: [], downs: [], mehs: [], peak: 'a' },
+  ];
+  assert.equal(votedFor(votes[0], 'b'), true);
+  assert.equal(votedFor(votes[0], 'a'), false);
+  assert.equal(votedFor(votes[1], 'a'), true);
+  assert.equal(allVotedFor({ votes, voters: ['a', 'b'], memePlayerId: 'a' }), true);
+  assert.equal(allVotedFor({ votes, voters: ['a', 'b'], memePlayerId: 'b' }), true);
+  // Wer noch nicht gestimmt hat, blockiert den Schnellwechsel.
+  assert.equal(allVotedFor({ votes: votes.slice(0, 1), voters: ['a', 'b'], memePlayerId: 'a' }), false);
+  // Das eigene Meme zählt nicht als fehlende Stimme.
+  assert.equal(allVotedFor({ votes: [], voters: ['a'], memePlayerId: 'a' }), true);
 });
 
 test('scoreRound ignoriert Stimmen und Peaks auf das eigene Meme', () => {
